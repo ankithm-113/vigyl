@@ -10,7 +10,7 @@
  *   Day 2  logger.ts    — winston structured logger            [done]
  *   Day 3  security.ts  — path sandbox + command policy      [done]
  *   Day 3  executor.ts  — PTY command execution              [done]
- *   Day 4  monitor.ts   — output buffer + error classification
+ *   Day 4  monitor.ts   — output buffer + error classification [done]
  *   Day 5  supervisor.ts— Claude intent parsing + patch generation
  *   Day 6  self-heal.ts — run/classify/patch/retry loop
  *   Day 7  daemon.ts    — orchestrator
@@ -33,6 +33,16 @@ export {
   resolveConfigPath,
   type VigylConfig,
 } from './config';
+
+export {
+  ERROR_TYPES,
+  Monitor,
+  classifyError,
+  extractLocation,
+  type ErrorContext,
+  type ErrorType,
+  type ExtractedLocation,
+} from './monitor';
 
 export {
   SecurityError,

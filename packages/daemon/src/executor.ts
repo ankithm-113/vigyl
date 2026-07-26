@@ -272,6 +272,23 @@ const ANSI_PATTERN = new RegExp(
   'g',
 );
 
+/**
+ * CSI sequences that move the cursor to a different row: CUP (H/f), CNL (E)
+ * and CUD (B). These are replaced with a newline rather than deleted.
+ *
+ * ConPTY does not always end a line with a newline -- it emits an absolute
+ * cursor move instead, e.g. "  ^" followed by ESC [ 5 ; 1 H before the next
+ * line. Stripping that as decoration silently welds two lines together, and
+ * the classifier in monitor.ts reasons line by line, so a merged line can
+ * hide the error that actually matters.
+ */
+const LINE_BREAKING_ANSI = new RegExp(
+  '(?:' + ESC + '[[]|' + CSI_8BIT + ')[0-9;]*[HfEB]',
+  'g',
+);
+
+const NEWLINE = String.fromCharCode(10);
+
 /** Remaining C0 controls. Tab, newline and CR are kept - they carry meaning. */
 const OTHER_CONTROL_CHARS = new RegExp(
   '[' +
@@ -313,8 +330,11 @@ const PROGRESS_BLOCKS = new RegExp(
  * error context window. A terminal shows only what follows the last \r, so
  * that is what we keep.
  */
-export function cleanOutput(raw: string): string {
-  const withoutAnsi = raw.replace(OSC_PATTERN, '').replace(ANSI_PATTERN, '');
+export function cleanOutput(raw: string, options: { trim?: boolean } = {}): string {
+  const withoutAnsi = raw
+    .replace(OSC_PATTERN, '')
+    .replace(LINE_BREAKING_ANSI, NEWLINE)
+    .replace(ANSI_PATTERN, '');
 
   const lines = withoutAnsi.split(/\r?\n/).map((line) => {
     if (!line.includes('\r')) return line;
@@ -322,7 +342,7 @@ export function cleanOutput(raw: string): string {
     return segments[segments.length - 1] ?? '';
   });
 
-  return lines
+  const collapsed = lines
     .join('\n')
     .replace(OTHER_CONTROL_CHARS, '')
     .replace(SPINNER_CHARS, '')
@@ -331,7 +351,11 @@ export function cleanOutput(raw: string): string {
     .map((line) => line.trimEnd())
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
-    .trim();
+    ;
+
+  // Streaming callers pass trim:false: trimming a chunk drops the trailing
+  // newline, and the Monitor would then weld the next chunk onto this line.
+  return options.trim === false ? collapsed : collapsed.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +510,7 @@ export class Executor extends EventEmitter {
           buffer += chunk;
         }
 
-        const cleaned = cleanOutput(chunk);
+        const cleaned = cleanOutput(chunk, { trim: false });
         if (cleaned !== '') this.emit('data', cleaned);
       });
 

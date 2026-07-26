@@ -94,6 +94,28 @@ describe('cleanOutput', () => {
     assert.match(cleaned, /\|----\|/);
   });
 
+  it('treats a ConPTY cursor move as a line break, not decoration', () => {
+    const esc = String.fromCharCode(27);
+    const nl = String.fromCharCode(10);
+    // ConPTY ends a line by jumping the cursor to the next row rather than
+    // emitting a newline. Deleting that as decoration welds the two lines
+    // together, and monitor.ts classifies line by line.
+    const raw = '  ^' + esc + '[5;1HError: Cannot find module';
+
+    const cleaned = cleanOutput(raw);
+
+    // Leading whitespace goes with the outer trim; the line break is the point.
+    assert.equal(cleaned, '^' + nl + 'Error: Cannot find module');
+  });
+
+  it('keeps the trailing newline when trim is disabled', () => {
+    const nl = String.fromCharCode(10);
+    // The streaming path must not trim: the Monitor holds an unterminated
+    // trailing line and would weld the next chunk onto it.
+    assert.equal(cleanOutput('line one' + nl, { trim: false }), 'line one' + nl);
+    assert.equal(cleanOutput('line one' + nl), 'line one');
+  });
+
   it('collapses runs of blank lines', () => {
     assert.equal(cleanOutput('a\n\n\n\n\nb'), 'a\n\nb');
   });
