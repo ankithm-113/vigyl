@@ -1,0 +1,25 @@
+{
+  "name": "vigyl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vigyl — your infrastructure, in your pocket.",
+  "packageManager": "npm@11.6.4",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "test": "turbo test",
+    "typecheck": "turbo typecheck",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "turbo": "^2.5.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

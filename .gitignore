@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+.turbo/
+
+# Vigyl runtime state — NEVER commit, contains API keys + bot token
+vigyl.config.json
+.vigyl/
+
+# env
+.env
+.env.local
+
+# logs
+*.log
+npm-debug.log*
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
