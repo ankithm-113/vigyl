@@ -22,7 +22,7 @@
  * runs.
  */
 import * as fs from 'fs';
-import { randomUUID } from 'crypto';
+import { ApprovalStore, approvalReasons, type ApprovalOwner } from './hitl';
 import { Executor } from './executor';
 import { logger } from './logger';
 import { SecurityError, SecurityLayer } from './security';
@@ -114,18 +114,9 @@ export interface DaemonStatus {
   startedAt?: number;
 }
 
-interface PendingApproval {
-  id: string;
-  parsed: ParsedCommand;
-  requestedAt: number;
-  expiresAt: number;
-  /** Optional caller-scoping, e.g. a Telegram chat id. */
-  owner?: string | number;
-}
-
 export interface HandleOptions {
   /** Scopes the approval so one chat cannot approve another chat's command. */
-  owner?: string | number;
+  owner?: ApprovalOwner;
 }
 
 export class DaemonNotStartedError extends Error {
@@ -135,13 +126,24 @@ export class DaemonNotStartedError extends Error {
   }
 }
 
+function explainClaimFailure(failure: 'unknown' | 'expired' | 'wrong_owner'): string {
+  switch (failure) {
+    case 'expired':
+      return 'That approval expired. Send the command again if you still want it.';
+    case 'wrong_owner':
+      return 'That approval belongs to someone else.';
+    default:
+      return 'That approval is no longer valid — it expired or was already handled.';
+  }
+}
+
 export class VigylDaemon {
   private readonly config: VigylConfig;
   private readonly security: SecurityLayer;
   private readonly executor: Executor;
   private readonly supervisor: Supervisor;
   private readonly selfHeal: SelfHealingLoop;
-  private readonly pending = new Map<string, PendingApproval>();
+  private readonly approvals: ApprovalStore;
 
   private running = false;
   private startedAt: number | undefined;
@@ -152,6 +154,7 @@ export class VigylDaemon {
     this.executor = parts.executor ?? new Executor(config);
     this.supervisor = parts.supervisor ?? new Supervisor(config);
     this.selfHeal = new SelfHealingLoop(this.executor, this.supervisor, config);
+    this.approvals = new ApprovalStore(config.hitl.timeout_seconds);
   }
 
   // -------------------------------------------------------------------------
@@ -179,22 +182,20 @@ export class VigylDaemon {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.executor.kill();
-    const dropped = this.pending.size;
-    this.pending.clear();
+    const dropped = this.approvals.clear();
     this.running = false;
     this.startedAt = undefined;
     logger.info('Vigyl daemon stopped', { droppedApprovals: dropped });
   }
 
   get status(): DaemonStatus {
-    this.expireStaleApprovals();
     return {
       running: this.running,
       busy: this.executor.isRunning,
       version: DAEMON_VERSION,
       workspaceRoot: this.security.workspaceRoot,
       model: this.config.anthropic.model,
-      pendingApprovals: this.pending.size,
+      pendingApprovals: this.approvals.size,
       ...(this.startedAt === undefined ? {} : { startedAt: this.startedAt }),
     };
   }
@@ -244,7 +245,7 @@ export class VigylDaemon {
       return { status: 'rejected', command: parsed.command, reason };
     }
 
-    const reasons = this.approvalReasons(parsed);
+    const reasons = approvalReasons(parsed, this.config.hitl.require_for, this.security);
     if (reasons.length > 0) {
       return this.requestApproval(parsed, reasons, options.owner);
     }
@@ -252,62 +253,19 @@ export class VigylDaemon {
     return this.execute(parsed, onProgress);
   }
 
-  /**
-   * Why this command needs a human.
-   *
-   * Two independent sources. The model sets requiresApproval, but the model is
-   * also the thing being steered by a natural-language message, so a keyword
-   * check runs alongside it against the operator's own configured triggers.
-   * Either one is enough.
-   */
-  private approvalReasons(parsed: ParsedCommand): string[] {
-    const reasons: string[] = [];
-    if (parsed.requiresApproval) reasons.push('Claude flagged this as needing approval');
-    if (parsed.isDestructive) reasons.push('the action is destructive');
-
-    const triggers = this.config.hitl.require_for;
-    const matched = triggers.filter((trigger) =>
-      this.security.requiresApproval(`${parsed.command} ${parsed.action} ${parsed.target}`, [trigger]),
-    );
-    for (const trigger of matched) {
-      reasons.push(`it matches the "${trigger}" approval rule`);
-    }
-    return reasons;
-  }
-
   private requestApproval(
     parsed: ParsedCommand,
     reasons: string[],
-    owner: string | number | undefined,
+    owner: ApprovalOwner | undefined,
   ): ApprovalRequiredResult {
-    this.expireStaleApprovals();
-
-    const id = randomUUID();
-    const now = Date.now();
-    const expiresAt = now + this.config.hitl.timeout_seconds * 1000;
-
-    this.pending.set(id, {
-      id,
-      parsed,
-      requestedAt: now,
-      expiresAt,
-      ...(owner === undefined ? {} : { owner }),
-    });
-
-    logger.info('Approval requested', {
-      approvalId: id,
-      command: parsed.command,
-      reasons,
-      expiresAt: new Date(expiresAt).toISOString(),
-    });
-
+    const approval = this.approvals.create(parsed, reasons, owner);
     return {
       status: 'approval_required',
-      approvalId: id,
+      approvalId: approval.id,
       command: parsed.command,
       description: parsed.description,
       isDestructive: parsed.isDestructive,
-      expiresAt,
+      expiresAt: approval.expiresAt,
       reasons,
     };
   }
@@ -324,48 +282,27 @@ export class VigylDaemon {
     options: HandleOptions = {},
   ): Promise<CommandResult> {
     if (!this.running) throw new DaemonNotStartedError();
-    this.expireStaleApprovals();
 
-    const entry = this.pending.get(approvalId);
-    if (entry === undefined) {
-      return {
-        status: 'rejected',
-        reason: 'That approval is no longer valid — it expired or was already handled.',
-      };
-    }
-    if (entry.owner !== undefined && options.owner !== undefined && entry.owner !== options.owner) {
-      logger.warn('Approval attempted by a different owner', {
-        approvalId,
-        expected: entry.owner,
-        got: options.owner,
-      });
-      return { status: 'rejected', reason: 'That approval belongs to someone else.' };
-    }
     if (this.executor.isRunning) {
       return { status: 'busy', reason: 'A command is already running. Wait for it to finish.' };
     }
 
-    this.pending.delete(approvalId);
-    logger.info('Approval granted', { approvalId, command: entry.parsed.command });
-    return this.execute(entry.parsed, onProgress);
+    const claim = this.approvals.claim(approvalId, options.owner);
+    if (!claim.ok) {
+      return { status: 'rejected', reason: explainClaimFailure(claim.failure) };
+    }
+
+    return this.execute(claim.approval.parsed, onProgress);
   }
 
   /** Discard a pending approval. Returns false if it was already gone. */
   deny(approvalId: string, options: HandleOptions = {}): boolean {
-    const entry = this.pending.get(approvalId);
-    if (entry === undefined) return false;
-    if (entry.owner !== undefined && options.owner !== undefined && entry.owner !== options.owner) {
-      return false;
-    }
-    this.pending.delete(approvalId);
-    logger.info('Approval denied', { approvalId, command: entry.parsed.command });
-    return true;
+    return this.approvals.deny(approvalId, options.owner);
   }
 
   /** Inspect a pending approval without consuming it. */
   peekApproval(approvalId: string): ParsedCommand | undefined {
-    this.expireStaleApprovals();
-    return this.pending.get(approvalId)?.parsed;
+    return this.approvals.peek(approvalId)?.parsed;
   }
 
   private async execute(parsed: ParsedCommand, onProgress: ProgressReporter): Promise<CommandResult> {
@@ -408,13 +345,4 @@ export class VigylDaemon {
     }
   }
 
-  private expireStaleApprovals(): void {
-    const now = Date.now();
-    for (const [id, entry] of this.pending) {
-      if (entry.expiresAt <= now) {
-        this.pending.delete(id);
-        logger.info('Approval expired', { approvalId: id, command: entry.parsed.command });
-      }
-    }
-  }
 }

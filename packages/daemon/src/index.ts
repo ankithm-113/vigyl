@@ -14,8 +14,8 @@
  *   Day 5  supervisor.ts— Claude intent parsing + patch generation [done]
  *   Day 6  self-heal.ts — run/classify/patch/retry loop        [done]
  *   Day 7  daemon.ts    — orchestrator                        [done]
- *   Day 8  bot.ts       — Telegram interface (grammY)
- *   Day 8  hitl.ts      — approval gate with expiry
+ *   Day 8  bot.ts       — Telegram interface (grammY)          [done]
+ *   Day 8  hitl.ts      — approval gate with expiry             [done]
  */
 
 export const VERSION = '0.1.0';
@@ -33,6 +33,30 @@ export {
   resolveConfigPath,
   type VigylConfig,
 } from './config';
+
+export {
+  CALLBACK_APPROVE,
+  CALLBACK_DENY,
+  TELEGRAM_MAX_MESSAGE,
+  TelegramInterface,
+  clampMessage,
+  escapeHtml,
+  explainStopReason,
+  isAuthorized,
+  parseCallbackData,
+  renderResult,
+  truncateOutput,
+  type RenderedMessage,
+} from './bot';
+
+export {
+  ApprovalStore,
+  approvalReasons,
+  type ApprovalOwner,
+  type ClaimFailure,
+  type ClaimResult,
+  type PendingApproval,
+} from './hitl';
 
 export {
   DAEMON_VERSION,
