@@ -12,8 +12,8 @@
     "build": "tsc -b",
     "dev": "tsc -b --watch",
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
-    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.tsbuildinfo',{force:true})\"",
-    "test": "node --test dist/**/*.test.js"
+    "clean": "node -e \"for (const p of ['dist','test-dist']) require('fs').rmSync(p,{recursive:true,force:true}); require('fs').rmSync('tsconfig.tsbuildinfo',{force:true})\"",
+    "test": "tsc -p tsconfig.test.json && node --test \"test-dist/**/*.test.js\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

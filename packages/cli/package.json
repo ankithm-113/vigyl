@@ -16,7 +16,7 @@
     "dev": "tsc -b --watch",
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.tsbuildinfo',{force:true})\"",
-    "test": "node --test dist/**/*.test.js"
+    "test": "node -e \"console.log('@vigyl/cli: no tests yet')\""
   },
   "dependencies": {
     "@vigyl/daemon": "^0.1.0",
