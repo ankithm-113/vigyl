@@ -8,8 +8,8 @@
  * Build order (Month 1, Week 1):
  *   Day 2  config.ts    — Zod-validated config loader          [done]
  *   Day 2  logger.ts    — winston structured logger            [done]
- *   Day 3  security.ts  — path sandbox + command policy
- *   Day 3  executor.ts  — PTY command execution
+ *   Day 3  security.ts  — path sandbox + command policy      [done]
+ *   Day 3  executor.ts  — PTY command execution              [done]
  *   Day 4  monitor.ts   — output buffer + error classification
  *   Day 5  supervisor.ts— Claude intent parsing + patch generation
  *   Day 6  self-heal.ts — run/classify/patch/retry loop
@@ -33,6 +33,26 @@ export {
   resolveConfigPath,
   type VigylConfig,
 } from './config';
+
+export {
+  SecurityError,
+  SecurityLayer,
+  isContained,
+  type ValidatePathOptions,
+} from './security';
+
+export {
+  EXIT_TIMEOUT,
+  Executor,
+  ExecutorBusyError,
+  ShellUnavailableError,
+  cleanOutput,
+  findExecutable,
+  resolveShell,
+  type ExecuteOptions,
+  type ExecutionResult,
+  type ShellSpec,
+} from './executor';
 
 export {
   LOG_DIR,
