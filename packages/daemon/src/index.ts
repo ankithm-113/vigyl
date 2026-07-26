@@ -11,7 +11,7 @@
  *   Day 3  security.ts  — path sandbox + command policy      [done]
  *   Day 3  executor.ts  — PTY command execution              [done]
  *   Day 4  monitor.ts   — output buffer + error classification [done]
- *   Day 5  supervisor.ts— Claude intent parsing + patch generation
+ *   Day 5  supervisor.ts— Claude intent parsing + patch generation [done]
  *   Day 6  self-heal.ts — run/classify/patch/retry loop
  *   Day 7  daemon.ts    — orchestrator
  *   Day 8  bot.ts       — Telegram interface (grammY)
@@ -33,6 +33,20 @@ export {
   resolveConfigPath,
   type VigylConfig,
 } from './config';
+
+export {
+  ACTIONS,
+  ParsedCommandSchema,
+  PatchProposalSchema,
+  Supervisor,
+  SupervisorError,
+  toUnvalidatedPatch,
+  type Action,
+  type ParsedCommand,
+  type PatchProposal,
+  type SupervisorContext,
+  type UnvalidatedPatch,
+} from './supervisor';
 
 export {
   ERROR_TYPES,
