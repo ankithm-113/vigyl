@@ -13,7 +13,7 @@
  *   Day 4  monitor.ts   — output buffer + error classification [done]
  *   Day 5  supervisor.ts— Claude intent parsing + patch generation [done]
  *   Day 6  self-heal.ts — run/classify/patch/retry loop        [done]
- *   Day 7  daemon.ts    — orchestrator
+ *   Day 7  daemon.ts    — orchestrator                        [done]
  *   Day 8  bot.ts       — Telegram interface (grammY)
  *   Day 8  hitl.ts      — approval gate with expiry
  */
@@ -33,6 +33,22 @@ export {
   resolveConfigPath,
   type VigylConfig,
 } from './config';
+
+export {
+  DAEMON_VERSION,
+  DaemonNotStartedError,
+  VigylDaemon,
+  type ApprovalRequiredResult,
+  type BusyResult,
+  type CommandResult,
+  type CommandStatus,
+  type CompletedResult,
+  type DaemonStatus,
+  type ErrorResult,
+  type FailedResult,
+  type HandleOptions,
+  type RejectedResult,
+} from './daemon';
 
 export {
   HARD_MAX_RETRIES,

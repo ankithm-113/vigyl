@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { HARD_MAX_RETRIES, SelfHealingLoop } from './self-heal';
+import { HARD_MAX_RETRIES, SelfHealingLoop, errorSignature } from './self-heal';
 import type { Executor, ExecutionResult } from './executor';
 import type { Supervisor, UnvalidatedPatch } from './supervisor';
 import type { VigylConfig } from './config';
@@ -344,6 +344,32 @@ describe('retry limits', () => {
     assert.equal(result.stoppedBecause, 'disabled');
     assert.equal(executor.commands.length, 1);
     assert.equal(supervisor.calls, 0);
+  });
+});
+
+describe('errorSignature', () => {
+  it('ignores the timestamped log path npm appends to every failure', () => {
+    // Found by running the daemon for real: without this, the same npm
+    // failure looked new every time and the loop burned all three retries.
+    const base = { type: 'unknown' as const, rawLines: [], exitCode: 1, signal: 'fallback' };
+    const first = errorSignature({
+      ...base,
+      message: 'npm error A complete log can be found in: /x/_logs/2026-07-26T20_09_07_255Z-debug-0.log',
+    });
+    const second = errorSignature({
+      ...base,
+      message: 'npm error A complete log can be found in: /x/_logs/2026-07-26T20_11_44_918Z-debug-0.log',
+    });
+
+    assert.equal(first, second);
+  });
+
+  it('still tells genuinely different failures apart', () => {
+    const base = { type: 'build_error' as const, rawLines: [], exitCode: 1, signal: 'compile' };
+    const a = errorSignature({ ...base, message: 'src/app.ts(12,5): error TS2304: Cannot find name foo.' });
+    const b = errorSignature({ ...base, message: 'src/app.ts(40,2): error TS2345: Argument of type X.' });
+
+    assert.notEqual(a, b);
   });
 });
 

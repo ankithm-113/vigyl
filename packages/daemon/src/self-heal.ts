@@ -80,14 +80,33 @@ export interface HealResult {
   errorType?: ErrorType;
   /** The last error line, for showing a human. */
   message?: string;
+  /** Cleaned output of the final run, for showing a human. */
+  output: string;
   patches: AppliedPatch[];
 }
 
 export type ProgressReporter = (message: string) => void;
 
-/** Stable identity for a failure, used to notice a patch that changed nothing. */
-function errorSignature(context: ErrorContext): string {
-  return `${context.type}::${context.message}`;
+/**
+ * Stable identity for a failure, used to notice a patch that changed nothing.
+ *
+ * Volatile fragments are normalised out first. npm ends every failure with the
+ * path to a fresh debug log:
+ *
+ *   npm error A complete log of this run can be found in:
+ *   .../_logs/2026-07-26T20_09_07_255Z-debug-0.log
+ *
+ * The timestamp differs on every run, so a raw string comparison never matches
+ * and the loop happily burns all three retries — and three LLM calls — on an
+ * error that has not changed at all. Long digit runs go too (pids, epoch ms),
+ * while short ones survive so a TS error code and a line number still
+ * distinguish two genuinely different failures.
+ */
+export function errorSignature(context: ErrorContext): string {
+  const normalized = context.message
+    .replace(/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9TZ_:.-]+/g, '<timestamp>')
+    .replace(/[0-9]{5,}/g, '<number>');
+  return `${context.type}::${normalized}`;
 }
 
 export class SelfHealingLoop {
@@ -128,6 +147,7 @@ export class SelfHealingLoop {
 
     let attempt = 0;
     let lastExitCode = 1;
+    let lastOutput = '';
     let lastContext: ErrorContext | undefined;
 
     while (attempt < totalRuns) {
@@ -146,6 +166,7 @@ export class SelfHealingLoop {
       }
 
       lastExitCode = result.exitCode;
+      lastOutput = result.cleanOutput;
 
       if (result.exitCode === 0) {
         monitor.onExit(0);
@@ -155,6 +176,7 @@ export class SelfHealingLoop {
           attempts: attempt,
           finalExitCode: 0,
           stoppedBecause: 'success',
+          output: result.cleanOutput,
           patches,
         };
       }
@@ -167,21 +189,21 @@ export class SelfHealingLoop {
 
       if (!this.config.self_heal.enabled) {
         onProgress('⚠ Self-healing is disabled in config.');
-        return this.failure(attempt, lastExitCode, 'disabled', context, patches);
+        return this.failure(attempt, lastExitCode, 'disabled', context, patches, lastOutput);
       }
 
       if (attempt >= totalRuns) break;
 
       if (NOT_PATCHABLE.has(context.type)) {
         onProgress(`⚠ ${context.type} cannot be fixed by editing a file. Stopping.`);
-        return this.failure(attempt, lastExitCode, 'not_auto_fixable', context, patches);
+        return this.failure(attempt, lastExitCode, 'not_auto_fixable', context, patches, lastOutput);
       }
 
       const signature = errorSignature(context);
       if (seenFailures.has(signature)) {
         // The previous patch was applied but changed nothing observable.
         onProgress('⚠ The same failure came back unchanged after a patch. Stopping.');
-        return this.failure(attempt, lastExitCode, 'repeated_failure', context, patches);
+        return this.failure(attempt, lastExitCode, 'repeated_failure', context, patches, lastOutput);
       }
       seenFailures.add(signature);
 
@@ -190,17 +212,17 @@ export class SelfHealingLoop {
       const proposal = await this.requestPatch(context);
       if (proposal === undefined) {
         onProgress('⚠ No confident fix available. Stopping.');
-        return this.failure(attempt, lastExitCode, 'no_patch_offered', context, patches);
+        return this.failure(attempt, lastExitCode, 'no_patch_offered', context, patches, lastOutput);
       }
 
       const applied = this.applyPatch(proposal, attempt);
       if (applied === 'rejected') {
         onProgress('⛔ Patch rejected: it targeted a file outside the workspace.');
-        return this.failure(attempt, lastExitCode, 'patch_rejected', context, patches);
+        return this.failure(attempt, lastExitCode, 'patch_rejected', context, patches, lastOutput);
       }
       if (applied === 'failed') {
         onProgress('✗ Could not write the patch. Stopping.');
-        return this.failure(attempt, lastExitCode, 'patch_write_failed', context, patches);
+        return this.failure(attempt, lastExitCode, 'patch_write_failed', context, patches, lastOutput);
       }
 
       patches.push(applied);
@@ -208,7 +230,7 @@ export class SelfHealingLoop {
     }
 
     onProgress(`⚠ Still failing after ${attempt} attempt(s). Manual intervention needed.`);
-    return this.failure(attempt, lastExitCode, 'retries_exhausted', lastContext, patches);
+    return this.failure(attempt, lastExitCode, 'retries_exhausted', lastContext, patches, lastOutput);
   }
 
   private failure(
@@ -217,6 +239,7 @@ export class SelfHealingLoop {
     stoppedBecause: StopReason,
     context: ErrorContext | undefined,
     patches: AppliedPatch[],
+    output: string,
   ): HealResult {
     return {
       success: false,
@@ -224,6 +247,7 @@ export class SelfHealingLoop {
       finalExitCode,
       stoppedBecause,
       ...(context === undefined ? {} : { errorType: context.type, message: context.message }),
+      output,
       patches,
     };
   }
