@@ -35,6 +35,15 @@ export {
 } from './config';
 
 export {
+  captureChatId,
+  checkAnthropicKey,
+  checkCommandParsing,
+  checkTelegramToken,
+  type ChatIdResult,
+  type CheckResult,
+} from './preflight';
+
+export {
   CALLBACK_APPROVE,
   CALLBACK_DENY,
   TELEGRAM_MAX_MESSAGE,

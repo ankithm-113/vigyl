@@ -273,7 +273,16 @@ export class TelegramInterface {
   private readonly daemon: VigylDaemon;
   private readonly allowedChatIds: readonly number[];
 
-  constructor(config: VigylConfig, daemon: VigylDaemon) {
+  /**
+   * @param onPollingStopped invoked when long polling ends unexpectedly. In
+   *   Month 1 Telegram is the ONLY interface, so a daemon that has lost it is
+   *   doing nothing at all — the caller is expected to exit rather than linger.
+   */
+  constructor(
+    config: VigylConfig,
+    daemon: VigylDaemon,
+    private readonly onPollingStopped?: (reason: string) => void,
+  ) {
     this.bot = new Bot(config.telegram.bot_token);
     this.daemon = daemon;
     this.allowedChatIds = config.telegram.allowed_chat_ids;
@@ -462,12 +471,30 @@ export class TelegramInterface {
   /** Begin long polling. Resolves once polling has started. */
   async start(): Promise<void> {
     logger.info('Telegram bot starting', { authorizedChats: this.allowedChatIds.length });
-    // start() only resolves when the bot stops, so do not await it here.
-    void this.bot.start({
-      onStart: (me) => {
-        logger.info('Telegram bot ready', { username: me.username });
-      },
-    });
+    // start() only resolves when the bot STOPS, so it must not be awaited.
+    // It must still be caught: an invalid token rejects here, and an
+    // unhandled rejection would take the whole daemon down with a stack
+    // trace instead of a diagnosis.
+    this.bot
+      .start({
+        onStart: (me) => {
+          logger.info('Telegram bot ready', { username: me.username });
+        },
+      })
+      .catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        // Do NOT claim the daemon carries on here. Nothing else holds the
+        // event loop open, so the process would exit seconds later anyway —
+        // silently, leaving a pid file pointing at nothing and 'vigyl start'
+        // cheerfully launching a second copy on top of it.
+        logger.error('Telegram polling stopped — the bot is unreachable', {
+          reason,
+          hint: reason.includes('401')
+            ? 'The bot token is wrong or has been revoked. Run vigyl init.'
+            : 'Check network access to api.telegram.org.',
+        });
+        this.onPollingStopped?.(reason);
+      });
   }
 
   async stop(): Promise<void> {

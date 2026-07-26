@@ -2,6 +2,11 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { VERSION } from '@vigyl/daemon';
+import { init } from './commands/init';
+import { start } from './commands/start';
+import { status } from './commands/status';
+import { stop } from './commands/stop';
+import { logFilePath, readLogTail } from './service';
 
 const program = new Command();
 
@@ -10,36 +15,65 @@ program
   .description('Vigyl — your infrastructure, in your pocket.')
   .version(VERSION);
 
-/** Placeholder for commands whose implementation lands on a later day. */
-function notYet(command: string, day: string): void {
-  console.error(chalk.yellow(`\n  ${command} is not implemented yet (lands on ${day}).\n`));
-  process.exitCode = 1;
+/** Commander does not await actions, so set the exit code rather than return it. */
+function finish(code: number): void {
+  process.exitCode = code;
 }
 
 program
   .command('init')
-  .description('Interactive setup wizard: writes vigyl.config.json')
-  .action(() => notYet('vigyl init', 'Day 9-10'));
+  .description('Interactive setup: validates your credentials, then writes vigyl.config.json')
+  .action(async () => {
+    finish(await init());
+  });
 
 program
   .command('start')
-  .description('Start the Vigyl daemon and Telegram bot')
-  .action(() => notYet('vigyl start', 'Day 11-12'));
+  .description('Start the Vigyl daemon in the background')
+  .option('-f, --foreground', 'run in this terminal instead of detaching')
+  .option('--skip-checks', 'skip the live credential checks')
+  .action(async (options: { foreground?: boolean; skipChecks?: boolean }) => {
+    finish(await start(options));
+  });
 
 program
   .command('stop')
-  .description('Stop a running daemon')
-  .action(() => notYet('vigyl stop', 'Day 11-12'));
+  .description('Stop the running daemon')
+  .action(async () => {
+    finish(await stop());
+  });
 
 program
   .command('status')
-  .description('Check whether the daemon is running')
-  .action(() => notYet('vigyl status', 'Day 11-12'));
+  .description('Show whether the daemon is running')
+  .action(() => {
+    finish(status());
+  });
 
 program
   .command('logs')
-  .description('Tail the daemon log')
-  .option('-n, --tail <n>', 'number of lines', '50')
-  .action(() => notYet('vigyl logs', 'Day 11-12'));
+  .description('Show recent daemon log lines')
+  .option('-n, --tail <lines>', 'how many lines to show', '50')
+  .action((options: { tail: string }) => {
+    const requested = Number.parseInt(options.tail, 10);
+    const count = Number.isInteger(requested) && requested > 0 ? requested : 50;
+    const lines = readLogTail(count);
+
+    if (lines.length === 0) {
+      console.log(chalk.gray(`No log entries yet (${logFilePath()}).`));
+      return;
+    }
+    // Deliberately not `tail -f`: the build guide shells out to it, which does
+    // not exist on Windows and would make `vigyl logs` platform-specific.
+    for (const line of lines) console.log(line);
+  });
+
+program
+  .command('run', { hidden: true })
+  .description('Run the daemon in the foreground (used internally by `start`)')
+  .action(async () => {
+    const { runForeground } = await import('./run');
+    finish(await runForeground());
+  });
 
 program.parse();
