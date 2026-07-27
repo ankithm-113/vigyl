@@ -29,6 +29,7 @@ export {
   getDefaultConfig,
   isConfigLoaded,
   loadConfig,
+  loadDotenv,
   resetConfig,
   resolveConfigPath,
   type VigylConfig,

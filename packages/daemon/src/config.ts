@@ -15,6 +15,18 @@ import * as dotenv from 'dotenv';
 import { z } from 'zod';
 import { LOG_LEVELS, logger, setLogLevel } from './logger';
 
+/**
+ * Load .env into process.env.
+ *
+ * loadConfig() does this itself, but `vigyl init` runs BEFORE any config
+ * exists and still needs the credentials, so the CLI calls this at startup.
+ * dotenv never overwrites a variable that is already set, so a real
+ * environment variable still wins over the file.
+ */
+export function loadDotenv(): void {
+  dotenv.config();
+}
+
 export const CONFIG_FILENAME = 'vigyl.config.json';
 export const DEFAULT_MODEL = 'claude-haiku-4-5';
 

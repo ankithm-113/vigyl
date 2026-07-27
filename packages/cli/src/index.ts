@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { VERSION } from '@vigyl/daemon';
+import { VERSION, loadDotenv } from '@vigyl/daemon';
 import { init } from './commands/init';
 import { start } from './commands/start';
 import { status } from './commands/status';
 import { stop } from './commands/stop';
 import { logFilePath, readLogTail } from './service';
+
+// Before anything else: `vigyl init` needs credentials from .env, and it
+// runs before any config file exists for loadConfig() to read.
+loadDotenv();
 
 const program = new Command();
 
