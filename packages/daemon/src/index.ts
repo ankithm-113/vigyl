@@ -36,6 +36,15 @@ export {
 } from './config';
 
 export {
+  DEFAULT_CONTEXT_TURNS,
+  SessionStore,
+  sanitize,
+  type ChatKey,
+  type SessionOptions,
+  type SessionTurn,
+} from './session';
+
+export {
   captureChatId,
   checkAnthropicKey,
   checkCommandParsing,

@@ -38,8 +38,11 @@ class FakeSupervisor {
     this.patches = patches;
   }
 
-  async parseCommand(): Promise<ParsedCommand> {
+  public readonly contexts: Array<string | undefined> = [];
+
+  async parseCommand(_message: string, context?: { recentOutput?: string }): Promise<ParsedCommand> {
     this.parseCalls++;
+    this.contexts.push(context?.recentOutput);
     const next = this.parses.shift();
     if (next === undefined) throw new Error('FakeSupervisor: no parse queued');
     if (next instanceof Error) throw next;
@@ -410,5 +413,102 @@ describe('integration: real executor, real self-healing', () => {
     const firstResult = await first;
     assert.equal(firstResult.status, 'completed');
     await daemon.stop();
+  });
+});
+
+describe('session context', () => {
+  it('sends no context on the first message of a chat', async () => {
+    const supervisor = new FakeSupervisor([command()]);
+    const daemon = await startedDaemon(supervisor);
+
+    await daemon.handleCommand('build it', noop, { owner: 111 });
+
+    assert.equal(supervisor.contexts[0], undefined);
+    await daemon.stop();
+  });
+
+  it('feeds the previous turn back as context on the next message', async () => {
+    const supervisor = new FakeSupervisor([command(), command()]);
+    const daemon = await startedDaemon(supervisor);
+
+    await daemon.handleCommand('build it', noop, { owner: 111 });
+    await daemon.handleCommand('run that again', noop, { owner: 111 });
+
+    const second = supervisor.contexts[1];
+    assert.ok(second !== undefined, "second call should carry context");
+    assert.match(second, /node ok.js/);
+    assert.match(second, /build it/);
+    await daemon.stop();
+  });
+
+  it('never leaks one chat context into another chat parse', async () => {
+    // The failure that matters: not merely reading someone else history,
+    // but having their output steer the model on your message.
+    const supervisor = new FakeSupervisor([
+      command({ command: 'node ok.js', description: 'ALICE-PRIVATE' }),
+      command(),
+    ]);
+    const daemon = await startedDaemon(supervisor);
+
+    await daemon.handleCommand('alice secret', noop, { owner: 111 });
+    await daemon.handleCommand('bob message', noop, { owner: 222 });
+
+    assert.equal(supervisor.contexts[1], undefined, "bob must start with a clean slate");
+    await daemon.stop();
+  });
+
+  it('keeps per-chat history separate and queryable', async () => {
+    const supervisor = new FakeSupervisor([command(), command()]);
+    const daemon = await startedDaemon(supervisor);
+
+    await daemon.handleCommand('alice', noop, { owner: 111 });
+    await daemon.handleCommand('bob', noop, { owner: 222 });
+
+    assert.equal(daemon.history(111).length, 1);
+    assert.equal(daemon.history(222).length, 1);
+    assert.equal(daemon.history(111)[0]?.userMessage, 'alice');
+    assert.equal(daemon.history(222)[0]?.userMessage, 'bob');
+    await daemon.stop();
+  });
+
+  it('records a refusal too, so the next turn knows it was blocked', async () => {
+    const supervisor = new FakeSupervisor([
+      command({ command: 'sudo rm -rf /var' }),
+    ]);
+    const daemon = await startedDaemon(supervisor);
+
+    await daemon.handleCommand('clean up', noop, { owner: 111 });
+
+    const history = daemon.history(111);
+    assert.equal(history.length, 1);
+    assert.equal(history[0]?.status, 'rejected');
+    await daemon.stop();
+  });
+
+  it('keeps no session at all when there is no owner', async () => {
+    // A shared bucket for anonymous callers would be a cross-chat leak
+    // waiting to happen, so no owner means no history.
+    const supervisor = new FakeSupervisor([command(), command()]);
+    const daemon = await startedDaemon(supervisor);
+
+    await daemon.handleCommand('one', noop);
+    await daemon.handleCommand('two', noop);
+
+    assert.equal(supervisor.contexts[1], undefined);
+    await daemon.stop();
+  });
+
+  it('forgets a chat on request and drops all sessions on stop', async () => {
+    const supervisor = new FakeSupervisor([command(), command()]);
+    const daemon = await startedDaemon(supervisor);
+    await daemon.handleCommand('alice', noop, { owner: 111 });
+    await daemon.handleCommand('bob', noop, { owner: 222 });
+
+    assert.equal(daemon.forget(111), true);
+    assert.equal(daemon.history(111).length, 0);
+    assert.equal(daemon.history(222).length, 1);
+
+    await daemon.stop();
+    assert.equal(daemon.history(222).length, 0);
   });
 });

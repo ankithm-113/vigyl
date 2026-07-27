@@ -26,6 +26,7 @@ import { ApprovalStore, approvalReasons, type ApprovalOwner } from './hitl';
 import { Executor } from './executor';
 import { logger } from './logger';
 import { SecurityError, SecurityLayer } from './security';
+import { SessionStore, type ChatKey, type SessionTurn } from './session';
 import { SelfHealingLoop, type AppliedPatch, type ProgressReporter, type StopReason } from './self-heal';
 import { Supervisor, SupervisorError, type ParsedCommand } from './supervisor';
 import type { ErrorType } from './monitor';
@@ -144,6 +145,7 @@ export class VigylDaemon {
   private readonly supervisor: Supervisor;
   private readonly selfHeal: SelfHealingLoop;
   private readonly approvals: ApprovalStore;
+  private readonly sessions = new SessionStore();
 
   private running = false;
   private startedAt: number | undefined;
@@ -183,6 +185,7 @@ export class VigylDaemon {
     if (!this.running) return;
     this.executor.kill();
     const dropped = this.approvals.clear();
+    this.sessions.clearAll();
     this.running = false;
     this.startedAt = undefined;
     logger.info('Vigyl daemon stopped', { droppedApprovals: dropped });
@@ -224,13 +227,21 @@ export class VigylDaemon {
     let parsed: ParsedCommand;
     try {
       onProgress('🧠 Working out what to run...');
+      // Context is fetched per chat and never merged across chats: one user's
+      // output must not steer the model while parsing another user's message.
+      const recentOutput =
+        options.owner === undefined ? undefined : this.sessions.recentOutput(options.owner);
+
       parsed = await this.supervisor.parseCommand(userMessage, {
         workspaceRoot: this.security.workspaceRoot,
+        ...(recentOutput === undefined ? {} : { recentOutput }),
       });
     } catch (err) {
       const reason = err instanceof SupervisorError ? err.message : String(err);
       logger.warn('Could not parse command', { reason });
-      return { status: 'error', reason };
+      const failure: CommandResult = { status: 'error', reason };
+      this.remember(options.owner, userMessage, failure);
+      return failure;
     }
 
     onProgress(`📋 ${parsed.description}`);
@@ -242,7 +253,9 @@ export class VigylDaemon {
     } catch (err) {
       const reason = err instanceof SecurityError ? err.message : String(err);
       logger.warn('Command refused by policy', { command: parsed.command, reason });
-      return { status: 'rejected', command: parsed.command, reason };
+      const refusal: CommandResult = { status: 'rejected', command: parsed.command, reason };
+      this.remember(options.owner, userMessage, refusal);
+      return refusal;
     }
 
     const reasons = approvalReasons(parsed, this.config.hitl.require_for, this.security);
@@ -250,7 +263,9 @@ export class VigylDaemon {
       return this.requestApproval(parsed, reasons, options.owner);
     }
 
-    return this.execute(parsed, onProgress);
+    const result = await this.execute(parsed, onProgress);
+    this.remember(options.owner, userMessage, result);
+    return result;
   }
 
   private requestApproval(
@@ -292,7 +307,9 @@ export class VigylDaemon {
       return { status: 'rejected', reason: explainClaimFailure(claim.failure) };
     }
 
-    return this.execute(claim.approval.parsed, onProgress);
+    const result = await this.execute(claim.approval.parsed, onProgress);
+    this.remember(options.owner, claim.approval.parsed.description, result);
+    return result;
   }
 
   /** Discard a pending approval. Returns false if it was already gone. */
@@ -303,6 +320,42 @@ export class VigylDaemon {
   /** Inspect a pending approval without consuming it. */
   peekApproval(approvalId: string): ParsedCommand | undefined {
     return this.approvals.peek(approvalId)?.parsed;
+  }
+
+  /** This chat's recent turns. Never another chat's. */
+  history(owner: ChatKey): readonly SessionTurn[] {
+    return this.sessions.history(owner);
+  }
+
+  /** The last command this chat ran, for "run that again". */
+  lastCommand(owner: ChatKey): string | undefined {
+    return this.sessions.lastCommand(owner);
+  }
+
+  /** Forget one chat's history. */
+  forget(owner: ChatKey): boolean {
+    return this.sessions.clear(owner);
+  }
+
+  /** Store the outcome so the next message in this chat has context. */
+  private remember(owner: ChatKey | undefined, userMessage: string, result: CommandResult): void {
+    // No owner means no session. A shared bucket for anonymous callers would
+    // be a cross-chat leak waiting to happen.
+    if (owner === undefined) return;
+
+    const command = 'command' in result ? result.command : undefined;
+    const description = 'description' in result ? result.description : undefined;
+    const exitCode = 'exitCode' in result ? result.exitCode : undefined;
+    const output = 'output' in result ? result.output : undefined;
+
+    this.sessions.record(owner, {
+      userMessage,
+      status: result.status,
+      ...(command === undefined ? {} : { command }),
+      ...(description === undefined ? {} : { description }),
+      ...(exitCode === undefined ? {} : { exitCode }),
+      ...(output === undefined ? {} : { outputTail: output }),
+    });
   }
 
   private async execute(parsed: ParsedCommand, onProgress: ProgressReporter): Promise<CommandResult> {
