@@ -26,6 +26,7 @@ import { logger } from './logger';
 import { Monitor, type ErrorContext, type ErrorType } from './monitor';
 import { SecurityError, SecurityLayer } from './security';
 import type { Executor } from './executor';
+import { SupervisorError } from './supervisor';
 import type { Supervisor, UnvalidatedPatch } from './supervisor';
 import type { VigylConfig } from './config';
 
@@ -56,6 +57,7 @@ export type StopReason =
   | 'disabled'
   | 'not_auto_fixable'
   | 'no_patch_offered'
+  | 'rate_limited'
   | 'patch_rejected'
   | 'patch_write_failed'
   | 'repeated_failure'
@@ -210,6 +212,10 @@ export class SelfHealingLoop {
       onProgress('🔧 Asking Claude for a fix...');
 
       const proposal = await this.requestPatch(context);
+      if (proposal === 'rate_limited') {
+        onProgress('⚠ Anthropic rate limit reached. Stopping so you can retry shortly.');
+        return this.failure(attempt, lastExitCode, 'rate_limited', context, patches, lastOutput);
+      }
       if (proposal === undefined) {
         onProgress('⚠ No confident fix available. Stopping.');
         return this.failure(attempt, lastExitCode, 'no_patch_offered', context, patches, lastOutput);
@@ -253,7 +259,9 @@ export class SelfHealingLoop {
   }
 
   /** Ask the Supervisor for a patch, with the relevant source attached. */
-  private async requestPatch(context: ErrorContext): Promise<UnvalidatedPatch | undefined> {
+  private async requestPatch(
+    context: ErrorContext,
+  ): Promise<UnvalidatedPatch | undefined | 'rate_limited'> {
     const errorText = context.rawLines.slice(-this.config.self_heal.context_lines).join('\n');
     const codeContext = this.gatherCodeContext(context);
 
@@ -262,7 +270,11 @@ export class SelfHealingLoop {
     } catch (err) {
       logger.warn('Patch generation failed', {
         reason: err instanceof Error ? err.message : String(err),
+        kind: err instanceof SupervisorError ? err.kind : 'unknown',
       });
+      // Distinguished because "we were rate limited" and "Claude had no fix"
+      // call for completely different responses from the user.
+      if (err instanceof SupervisorError && err.kind === 'rate_limit') return 'rate_limited';
       return undefined;
     }
   }

@@ -41,12 +41,30 @@ export const ACTIONS = [
 
 export type Action = (typeof ACTIONS)[number];
 
+/**
+ * What went wrong, so callers can react rather than just report.
+ *
+ * A rate limit is temporary and worth telling the user to retry; a bad key is
+ * permanent and worth telling them to fix their config. Collapsing both into
+ * one opaque error made the self-healing loop say "no fix available", which is
+ * actively misleading when the truth is "we never got to ask".
+ */
+export type SupervisorFailure =
+  | 'auth'
+  | 'rate_limit'
+  | 'timeout'
+  | 'connection'
+  | 'api'
+  | 'unknown';
+
 export class SupervisorError extends Error {
   public readonly originalError?: unknown;
+  public readonly kind: SupervisorFailure;
 
-  constructor(message: string, originalError?: unknown) {
+  constructor(message: string, kind: SupervisorFailure = 'unknown', originalError?: unknown) {
     super(message);
     this.name = 'SupervisorError';
+    this.kind = kind;
     this.originalError = originalError;
   }
 }
@@ -227,7 +245,7 @@ export class Supervisor {
   /** Turn a plain-English request into a structured, still-untrusted command. */
   async parseCommand(userMessage: string, context: SupervisorContext): Promise<ParsedCommand> {
     if (userMessage.trim() === '') {
-      throw new SupervisorError('Cannot parse an empty command.');
+      throw new SupervisorError('Cannot parse an empty command.', 'unknown');
     }
 
     const userContent =
@@ -257,6 +275,7 @@ export class Supervisor {
     if (parsed === null || parsed === undefined) {
       throw new SupervisorError(
         `Claude did not return a usable command (stop reason: ${response.stop_reason ?? 'unknown'}).`,
+        'api',
       );
     }
 
@@ -331,26 +350,33 @@ export class Supervisor {
       if (err instanceof Anthropic.AuthenticationError) {
         throw new SupervisorError(
           'Anthropic rejected the API key. Check anthropic.api_key in vigyl.config.json.',
+          'auth',
           err,
         );
       }
       if (err instanceof Anthropic.RateLimitError) {
         throw new SupervisorError(
           'Anthropic rate limit reached and retries were exhausted. Try again shortly.',
+          'rate_limit',
           err,
         );
       }
       if (err instanceof Anthropic.APIConnectionTimeoutError) {
-        throw new SupervisorError(`Timed out waiting for Claude to ${what}.`, err);
+        throw new SupervisorError(`Timed out waiting for Claude to ${what}.`, 'timeout', err);
       }
       if (err instanceof Anthropic.APIConnectionError) {
-        throw new SupervisorError(`Could not reach the Anthropic API to ${what}.`, err);
+        throw new SupervisorError(`Could not reach the Anthropic API to ${what}.`, 'connection', err);
       }
       if (err instanceof Anthropic.APIError) {
-        throw new SupervisorError(`Anthropic API error while trying to ${what}: ${err.message}`, err);
+        throw new SupervisorError(
+          `Anthropic API error while trying to ${what}: ${err.message}`,
+          'api',
+          err,
+        );
       }
       throw new SupervisorError(
         `Unexpected failure while trying to ${what}: ${err instanceof Error ? err.message : String(err)}`,
+        'unknown',
         err,
       );
     }
