@@ -68,6 +68,18 @@ export function clampMessage(text: string): string {
   return `${text.slice(0, TELEGRAM_MAX_MESSAGE - 20)}\n… [truncated]`;
 }
 
+/** Undo our own markup for the plain-text fallback. */
+export function stripHtml(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, '')
+    .split('&lt;')
+    .join('<')
+    .split('&gt;')
+    .join('>')
+    .split('&amp;')
+    .join('&');
+}
+
 function codeBlock(text: string): string {
   return `<pre>${escapeHtml(text)}</pre>`;
 }
@@ -155,6 +167,8 @@ export function explainStopReason(reason: StopReason): string {
       return 'This kind of failure cannot be fixed by editing a file — it needs you.';
     case 'no_patch_offered':
       return 'Claude was not confident enough to propose a fix.';
+    case 'rate_limited':
+      return 'Anthropic rate-limited us before a fix could be generated. Try again shortly.';
     case 'patch_rejected':
       return 'A proposed fix targeted a file outside the workspace and was blocked.';
     case 'patch_write_failed':
@@ -185,6 +199,93 @@ export function parseCallbackData(
   return undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Flood control
+// ---------------------------------------------------------------------------
+
+/** How hard to try when Telegram pushes back. */
+export interface RetryPolicy {
+  maxAttempts: number;
+  /** Never sleep longer than this for a single retry. */
+  maxWaitMs: number;
+}
+
+export const DEFAULT_RETRY_POLICY: RetryPolicy = { maxAttempts: 4, maxWaitMs: 30_000 };
+
+/** Shape of the raw Telegram response a transformer sees. */
+export interface RawTelegramResponse {
+  ok: boolean;
+  error_code?: number;
+  description?: string;
+  parameters?: { retry_after?: number };
+}
+
+/**
+ * Decide whether to retry a Telegram call, and how long to wait.
+ *
+ * 429 is flood control and Telegram tells us exactly how long to wait in
+ * parameters.retry_after — honour it rather than guessing, because guessing
+ * short gets the bot rate-limited harder. 5xx is Telegram being unwell, so
+ * back off exponentially. Everything else (400 bad request, 401 bad token,
+ * 403 blocked by the user) is our fault or permanent, and retrying it just
+ * wastes time and hides the real error.
+ *
+ * Pure, so the policy can be tested without a network.
+ */
+export function retryDecision(
+  response: RawTelegramResponse,
+  attempt: number,
+  policy: RetryPolicy = DEFAULT_RETRY_POLICY,
+): { retry: boolean; waitMs: number } {
+  const noRetry = { retry: false, waitMs: 0 };
+  if (response.ok) return noRetry;
+  if (attempt >= policy.maxAttempts) return noRetry;
+
+  const code = response.error_code;
+
+  if (code === 429) {
+    const retryAfter = response.parameters?.retry_after;
+    const waitMs = (typeof retryAfter === "number" && retryAfter > 0 ? retryAfter : 1) * 1000;
+    // A retry_after longer than we are willing to wait means giving up is
+    // more honest than sleeping for a minute inside a command handler.
+    if (waitMs > policy.maxWaitMs) return noRetry;
+    return { retry: true, waitMs };
+  }
+
+  if (code !== undefined && code >= 500 && code < 600) {
+    const backoff = Math.min(500 * 2 ** (attempt - 1), policy.maxWaitMs);
+    return { retry: true, waitMs: backoff };
+  }
+
+  return noRetry;
+}
+
+type ApiCall = (method: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>;
+
+/**
+ * grammY API transformer applying the policy above.
+ *
+ * Registered on bot.api so every outbound call is covered — including the
+ * progress-message edits, which are the ones most likely to trip flood
+ * control during a noisy build.
+ */
+export function createFloodControl(policy: RetryPolicy = DEFAULT_RETRY_POLICY) {
+  return async (prev: ApiCall, method: string, payload: unknown, signal?: AbortSignal) => {
+    for (let attempt = 1; ; attempt++) {
+      const response = (await prev(method, payload, signal)) as RawTelegramResponse;
+      const decision = retryDecision(response, attempt, policy);
+      if (!decision.retry) return response;
+
+      logger.warn("Telegram pushed back; retrying", {
+        method,
+        attempt,
+        errorCode: response.error_code,
+        waitMs: decision.waitMs,
+      });
+      await new Promise((resolve) => setTimeout(resolve, decision.waitMs));
+    }
+  };
+}
 // ---------------------------------------------------------------------------
 // Live progress
 // ---------------------------------------------------------------------------
@@ -284,6 +385,8 @@ export class TelegramInterface {
     private readonly onPollingStopped?: (reason: string) => void,
   ) {
     this.bot = new Bot(config.telegram.bot_token);
+    // Every outbound call retries on 429/5xx, progress edits included.
+    this.bot.api.config.use(createFloodControl() as never);
     this.daemon = daemon;
     this.allowedChatIds = config.telegram.allowed_chat_ids;
 
@@ -447,12 +550,36 @@ export class TelegramInterface {
     });
   }
 
+  /**
+   * Send a result, falling back to plain text if Telegram rejects the HTML.
+   *
+   * The escaping is careful, but command output is arbitrary and Telegram's
+   * HTML parser is stricter than it looks. Losing the entire result of a
+   * ten-minute deploy because one byte upset the parser is not an acceptable
+   * failure mode, so a rejected message is re-sent unformatted.
+   */
   private async send(ctx: Context, result: CommandResult): Promise<void> {
     const rendered = renderResult(result);
-    await ctx.reply(rendered.text, {
-      parse_mode: 'HTML',
-      ...(rendered.keyboard === undefined ? {} : { reply_markup: rendered.keyboard }),
-    });
+    const markup = rendered.keyboard === undefined ? {} : { reply_markup: rendered.keyboard };
+
+    try {
+      await ctx.reply(rendered.text, { parse_mode: 'HTML', ...markup });
+      return;
+    } catch (err) {
+      logger.warn('Formatted reply rejected; retrying as plain text', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      await ctx.reply(stripHtml(rendered.text), markup);
+    } catch (err) {
+      // Nothing further to try; the result is in the log either way.
+      logger.error('Could not deliver the result to Telegram', {
+        status: result.status,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Remove the buttons so an approval cannot be pressed twice. */

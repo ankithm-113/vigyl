@@ -12,6 +12,10 @@ import {
   parseCallbackData,
   renderResult,
   truncateOutput,
+  DEFAULT_RETRY_POLICY,
+  createFloodControl,
+  retryDecision,
+  stripHtml,
 } from './bot';
 import type { CommandResult } from './daemon';
 
@@ -282,5 +286,113 @@ describe('explainStopReason', () => {
       seen.add(text);
     }
     assert.equal(seen.size, reasons.length, 'each reason should read differently');
+  });
+});
+
+
+describe('retryDecision (Telegram flood control)', () => {
+  it('does not retry a successful call', () => {
+    assert.deepEqual(retryDecision({ ok: true }, 1), { retry: false, waitMs: 0 });
+  });
+
+  it('honours retry_after on a 429 rather than guessing', () => {
+    // Guessing short gets the bot rate-limited harder, so the number Telegram
+    // supplies is the only sensible wait.
+    const decision = retryDecision(
+      { ok: false, error_code: 429, parameters: { retry_after: 7 } },
+      1,
+    );
+    assert.deepEqual(decision, { retry: true, waitMs: 7_000 });
+  });
+
+  it('defaults to one second when a 429 carries no retry_after', () => {
+    assert.deepEqual(retryDecision({ ok: false, error_code: 429 }, 1), {
+      retry: true,
+      waitMs: 1_000,
+    });
+  });
+
+  it('gives up rather than sleeping longer than the policy allows', () => {
+    const decision = retryDecision(
+      { ok: false, error_code: 429, parameters: { retry_after: 600 } },
+      1,
+      { maxAttempts: 4, maxWaitMs: 30_000 },
+    );
+    // A ten-minute sleep inside a command handler is not a retry.
+    assert.equal(decision.retry, false);
+  });
+
+  it('backs off exponentially on 5xx', () => {
+    const waits = [1, 2, 3].map(
+      (attempt) => retryDecision({ ok: false, error_code: 500 }, attempt).waitMs,
+    );
+    assert.deepEqual(waits, [500, 1_000, 2_000]);
+  });
+
+  it('never retries a client error', () => {
+    // 400 is our bug, 401 is a bad token, 403 is the user blocking the bot.
+    // Retrying any of them wastes time and hides the real problem.
+    for (const code of [400, 401, 403, 404]) {
+      assert.equal(retryDecision({ ok: false, error_code: code }, 1).retry, false, String(code));
+    }
+  });
+
+  it('stops once the attempt budget is spent', () => {
+    const { maxAttempts } = DEFAULT_RETRY_POLICY;
+    assert.equal(retryDecision({ ok: false, error_code: 429 }, maxAttempts).retry, false);
+  });
+});
+
+describe('createFloodControl', () => {
+  it('retries a 429 and returns the eventual success', async () => {
+    let calls = 0;
+    const transformer = createFloodControl({ maxAttempts: 4, maxWaitMs: 30_000 });
+    const prev = async (): Promise<unknown> => {
+      calls++;
+      return calls < 3
+        ? { ok: false, error_code: 429, parameters: { retry_after: 0 } }
+        : { ok: true, result: 42 };
+    };
+
+    const result = (await transformer(prev, 'sendMessage', {})) as { ok: boolean };
+
+    assert.equal(result.ok, true);
+    assert.equal(calls, 3);
+  });
+
+  it('returns the failure once retries are exhausted, rather than looping', async () => {
+    let calls = 0;
+    const transformer = createFloodControl({ maxAttempts: 2, maxWaitMs: 30_000 });
+    const prev = async (): Promise<unknown> => {
+      calls++;
+      return { ok: false, error_code: 429, parameters: { retry_after: 0 } };
+    };
+
+    const result = (await transformer(prev, 'sendMessage', {})) as { ok: boolean };
+
+    assert.equal(result.ok, false);
+    assert.equal(calls, 2);
+  });
+
+  it('passes a client error straight through without retrying', async () => {
+    let calls = 0;
+    const transformer = createFloodControl();
+    const prev = async (): Promise<unknown> => {
+      calls++;
+      return { ok: false, error_code: 400, description: 'Bad Request' };
+    };
+
+    await transformer(prev, 'sendMessage', {});
+
+    assert.equal(calls, 1);
+  });
+});
+
+describe('stripHtml', () => {
+  it('produces a readable plain-text fallback', () => {
+    // Used when Telegram rejects our HTML: the result still has to arrive.
+    const nl = String.fromCharCode(10);
+    const html = '✅ <b>Done</b>' + nl + '<pre>a &lt; b &amp; c</pre>';
+    assert.equal(stripHtml(html), '✅ Done' + nl + 'a < b & c');
   });
 });
