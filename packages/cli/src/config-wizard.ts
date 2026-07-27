@@ -68,6 +68,75 @@ async function promptUntilValid(
   }
 }
 
+/**
+ * Headless setup, for CI and for any shell without a TTY.
+ *
+ * Reads both credentials from the environment rather than prompting, runs the
+ * same live checks, and writes the same config. Secrets come from env so they
+ * never land in shell history or a terminal transcript.
+ */
+export async function runHeadless(cwd: string = process.cwd()): Promise<WizardResult | undefined> {
+  const apiKey = (process.env['ANTHROPIC_API_KEY'] ?? '').trim();
+  const botToken = (process.env['TELEGRAM_BOT_TOKEN'] ?? '').trim();
+  const workspace = (process.env['VIGYL_WORKSPACE'] ?? cwd).trim();
+
+  const missing: string[] = [];
+  if (apiKey === '') missing.push('ANTHROPIC_API_KEY');
+  if (botToken === '') missing.push('TELEGRAM_BOT_TOKEN');
+
+  if (missing.length > 0) {
+    console.error(chalk.red('Missing required environment variable(s): ' + missing.join(', ')));
+    console.error(chalk.gray('Set them, or run `vigyl init` in a terminal.'));
+    return undefined;
+  }
+
+  const resolvedWorkspace = fs.realpathSync.native(path.resolve(workspace));
+  console.log(chalk.gray('  Workspace: ' + resolvedWorkspace));
+
+  const keyCheck = await withSpinner('Checking Anthropic API key...', () =>
+    checkAnthropicKey(apiKey, DEFAULT_MODEL),
+  );
+  if (!keyCheck.ok) return undefined;
+
+  // The check that actually proves structured outputs work end to end.
+  const parseCheck = await withSpinner('Testing structured-output command parsing...', () =>
+    checkCommandParsing(apiKey, DEFAULT_MODEL, resolvedWorkspace),
+  );
+  if (!parseCheck.ok) return undefined;
+
+  const tokenCheck = await withSpinner('Checking Telegram bot token...', () =>
+    checkTelegramToken(botToken),
+  );
+  if (!tokenCheck.ok) return undefined;
+  const botUsername = String(tokenCheck.info?.['username'] ?? '');
+
+  console.log(chalk.yellow('  Message @' + botUsername + ' on Telegram now to authorize your chat.'));
+  const spinner = ora('Waiting for a message (2 minutes)...').start();
+  const captured = await captureChatId(botToken);
+  if (captured.ok && captured.chatId !== undefined) spinner.succeed(chalk.green(captured.detail));
+  else spinner.warn(chalk.yellow(captured.detail));
+
+  const allowedChatIds = captured.chatId === undefined ? [] : [captured.chatId];
+
+  const config = {
+    workspace_root: resolvedWorkspace,
+    telegram: { bot_token: botToken, allowed_chat_ids: allowedChatIds },
+    anthropic: { api_key: apiKey, model: DEFAULT_MODEL },
+    hitl: {
+      require_for: ['production', 'env', 'delete', 'migrate', 'push'],
+      timeout_seconds: 300,
+    },
+    self_heal: { enabled: true, max_retries: 3, context_lines: 80 },
+    daemon: { log_level: 'info', log_retention_days: 7 },
+  };
+
+  const configPath = path.join(cwd, CONFIG_FILENAME);
+  writeConfig(configPath, config);
+  ensureGitignored(cwd);
+
+  return { configPath, config, ...(botUsername === '' ? {} : { botUsername }) };
+}
+
 export async function runWizard(cwd: string = process.cwd()): Promise<WizardResult | undefined> {
   // ---- workspace -----------------------------------------------------------
   const { workspaceRoot } = await inquirer.prompt<{ workspaceRoot: string }>([

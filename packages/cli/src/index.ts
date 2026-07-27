@@ -23,8 +23,12 @@ function finish(code: number): void {
 program
   .command('init')
   .description('Interactive setup: validates your credentials, then writes vigyl.config.json')
-  .action(async () => {
-    finish(await init());
+  .option(
+    '--non-interactive',
+    'read ANTHROPIC_API_KEY and TELEGRAM_BOT_TOKEN from the environment instead of prompting',
+  )
+  .action(async (options: { nonInteractive?: boolean }) => {
+    finish(await init(options));
   });
 
 program

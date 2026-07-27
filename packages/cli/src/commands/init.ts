@@ -3,9 +3,17 @@ import * as path from 'path';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import { CONFIG_FILENAME, runWizard } from '../config-wizard';
+import { CONFIG_FILENAME, runHeadless, runWizard } from '../config-wizard';
 
-export async function init(cwd: string = process.cwd()): Promise<number> {
+export interface InitOptions {
+  /** Read credentials from the environment instead of prompting. */
+  nonInteractive?: boolean;
+}
+
+export async function init(
+  options: InitOptions = {},
+  cwd: string = process.cwd(),
+): Promise<number> {
   console.log(
     boxen(
       `${chalk.white.bold('Vigyl setup')}\n${chalk.gray('Your infrastructure, in your pocket.')}`,
@@ -13,8 +21,12 @@ export async function init(cwd: string = process.cwd()): Promise<number> {
     ),
   );
 
+  // A wizard needs somewhere to type. Fail with an instruction rather than
+  // an inquirer stack trace when there is no terminal attached.
+  const headless = options.nonInteractive === true || process.stdin.isTTY !== true;
+
   const configPath = path.join(cwd, CONFIG_FILENAME);
-  if (fs.existsSync(configPath)) {
+  if (fs.existsSync(configPath) && !headless) {
     const { overwrite } = await inquirer.prompt<{ overwrite: boolean }>([
       {
         type: 'confirm',
@@ -29,7 +41,12 @@ export async function init(cwd: string = process.cwd()): Promise<number> {
     }
   }
 
-  const result = await runWizard(cwd);
+  if (headless && options.nonInteractive !== true) {
+    console.log(
+      chalk.yellow('No interactive terminal detected - using environment variables.'),
+    );
+  }
+  const result = headless ? await runHeadless(cwd) : await runWizard(cwd);
   if (result === undefined) {
     console.log(
       chalk.yellow('\nSetup cancelled. Nothing was written.\n') +
