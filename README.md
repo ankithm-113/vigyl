@@ -36,13 +36,13 @@ npm install -g @vigyl/cli
 Or the one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nulldesk/vigyl/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ankithm-113/vigyl/main/scripts/install.sh | bash
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/nulldesk/vigyl/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/ankithm-113/vigyl/main/scripts/install.ps1 | iex
 ```
 
 Requires **Node 20 or newer**. Works on Linux, macOS and Windows.
@@ -216,7 +216,7 @@ Start with `vigyl doctor`. Common problems and fixes:
 ## Development
 
 ```bash
-git clone https://github.com/nulldesk/vigyl && cd vigyl
+git clone https://github.com/ankithm-113/vigyl && cd vigyl
 npm install
 npm run build
 npm test

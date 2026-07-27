@@ -1,6 +1,6 @@
 # Vigyl quickstart installer for Windows.
 #
-#   irm https://raw.githubusercontent.com/nulldesk/vigyl/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/ankithm-113/vigyl/main/scripts/install.ps1 | iex
 #
 # Installs @vigyl/cli globally and tells you what to do next. It does not run
 # anything in your project and does not touch any credentials.
