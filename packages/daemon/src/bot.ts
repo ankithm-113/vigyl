@@ -22,6 +22,7 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import { logger } from './logger';
+import type { HistoryEntry } from './history';
 import type { CommandResult } from './daemon';
 import type { VigylDaemon } from './daemon';
 import type { StopReason } from './self-heal';
@@ -186,6 +187,38 @@ function logKeyboard(
   return {
     keyboard: new InlineKeyboard().text('📄 View full log', `${CALLBACK_LOG}:${commandId}`),
   };
+}
+
+/** Status glyphs for the history list. */
+const STATUS_ICON: Readonly<Record<string, string>> = {
+  completed: '✅',
+  failed: '❌',
+  rejected: '⛔',
+  approval_required: '⚠️',
+  busy: '⏳',
+  error: '⚠️',
+};
+
+/** Render a chat's command history. Pure; no Telegram calls. */
+export function renderHistory(entries: readonly HistoryEntry[]): string {
+  if (entries.length === 0) {
+    return 'No commands yet in this chat.';
+  }
+
+  const lines = ['<b>Recent commands</b>', ''];
+  for (const entry of entries) {
+    const icon = STATUS_ICON[entry.status] ?? '•';
+    const when = new Date(entry.at).toISOString().replace('T', ' ').slice(0, 16);
+    lines.push(`${icon} <i>${escapeHtml(when)}</i> — ${escapeHtml(entry.userMessage)}`);
+    if (entry.command !== undefined) {
+      lines.push(`   <code>${escapeHtml(entry.command)}</code>`);
+    }
+    if (entry.commandId !== undefined) {
+      lines.push(`   log: <code>${escapeHtml(entry.commandId)}</code>`);
+    }
+  }
+  lines.push('', '/repeat runs the last one again. /logs &lt;id&gt; shows full output.');
+  return clampMessage(lines.join(String.fromCharCode(10)));
 }
 
 /** Plain-English gloss for a StopReason, so the user knows what to do next. */
@@ -422,6 +455,7 @@ export class TelegramInterface {
     this.warnAboutGroupChats();
     this.installAuth();
     this.installCommands();
+    this.installHistoryCommands();
     this.installLogsCommand();
     this.installApprovalButtons();
     this.installNaturalLanguage();
@@ -499,6 +533,39 @@ export class TelegramInterface {
         lines.push(`${status.pendingApprovals} approval(s) waiting.`);
       }
       await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+    });
+  }
+
+  private installHistoryCommands(): void {
+    this.bot.command('history', async (ctx) => {
+      const entries = this.daemon.commandHistory(ctx.chat.id, 10);
+      await ctx.reply(renderHistory(entries), { parse_mode: 'HTML' });
+    });
+
+    this.bot.command('repeat', async (ctx) => {
+      const owner = ctx.chat.id;
+      const entry = this.daemon.repeatable(owner);
+
+      if (entry === undefined) {
+        await ctx.reply('Nothing to repeat in this chat yet.');
+        return;
+      }
+
+      // Show what is about to happen before it happens — /repeat on a
+      // half-remembered command is otherwise a small act of faith.
+      await ctx.reply(`🔁 Repeating: <i>${escapeHtml(entry.userMessage)}</i>`, {
+        parse_mode: 'HTML',
+      });
+
+      const presenter = new ProgressPresenter(ctx);
+      try {
+        const result = await this.daemon.repeat(owner, (line) => presenter.push(line), { owner });
+        await this.send(ctx, result);
+      } catch (err) {
+        await this.reportUnexpected(ctx, err);
+      } finally {
+        presenter.dispose();
+      }
     });
   }
 
@@ -754,6 +821,8 @@ const HELP = `<b>Vigyl command reference</b>
 • Restart the API service
 • Is Redis running?
 
+/history — recent commands
+/repeat — run the last one again
 /logs — full output of your last command
 /logs &lt;id&gt; — a specific command
 

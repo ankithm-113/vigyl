@@ -36,6 +36,12 @@ export {
 } from './config';
 
 export {
+  HistoryStore,
+  type HistoryEntry,
+  type HistoryOptions,
+} from './history';
+
+export {
   CommandLogStore,
   isValidCommandId,
   type LogMetadata,
@@ -73,6 +79,7 @@ export {
   explainStopReason,
   isAuthorized,
   parseCallbackData,
+  renderHistory,
   renderResult,
   truncateOutput,
   type RenderedMessage,

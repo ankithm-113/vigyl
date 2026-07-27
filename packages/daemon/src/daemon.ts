@@ -27,6 +27,7 @@ import { ApprovalStore, approvalReasons, type ApprovalOwner } from './hitl';
 import { Executor } from './executor';
 
 import { SecurityError, SecurityLayer } from './security';
+import { HistoryStore, type HistoryEntry } from './history';
 import { CommandLogStore, type StoredLog } from './log-store';
 import { LOG_DIR, logger } from './logger';
 import { SessionStore, type ChatKey, type SessionTurn } from './session';
@@ -154,11 +155,22 @@ export class VigylDaemon {
   private readonly approvals: ApprovalStore;
   private readonly sessions = new SessionStore();
   private readonly logs: CommandLogStore;
+  private readonly commands: HistoryStore;
 
   private running = false;
   private startedAt: number | undefined;
 
-  constructor(config: VigylConfig, parts: { supervisor?: Supervisor; executor?: Executor } = {}) {
+  /**
+   * @param parts.stateDir where runtime state lives. Defaults to .vigyl beside
+   *   the daemon log, which is what production wants — one daemon per project
+   *   directory. Injectable because it is process-wide otherwise, so two
+   *   daemons in one process (only tests do this) would share history.
+   */
+  constructor(
+    config: VigylConfig,
+    parts: { supervisor?: Supervisor; executor?: Executor; stateDir?: string } = {},
+  ) {
+    const stateDir = parts.stateDir ?? path.dirname(LOG_DIR);
     this.config = config;
     this.security = new SecurityLayer(config.workspace_root);
     this.executor = parts.executor ?? new Executor(config);
@@ -166,7 +178,9 @@ export class VigylDaemon {
     this.selfHeal = new SelfHealingLoop(this.executor, this.supervisor, config);
     this.approvals = new ApprovalStore(config.hitl.timeout_seconds);
     // Under .vigyl/logs, alongside daemon.log, so one directory holds all output.
-    this.logs = new CommandLogStore(path.join(LOG_DIR, 'commands'));
+    this.logs = new CommandLogStore(path.join(stateDir, 'logs', 'commands'));
+    // Sibling of logs/, so all runtime state lives under one directory.
+    this.commands = new HistoryStore(path.join(stateDir, 'history.json'));
   }
 
   // -------------------------------------------------------------------------
@@ -332,9 +346,40 @@ export class VigylDaemon {
     return this.approvals.peek(approvalId)?.parsed;
   }
 
-  /** This chat's recent turns. Never another chat's. */
-  history(owner: ChatKey): readonly SessionTurn[] {
+  /** This chat's in-memory context turns. Never another chat's. */
+  sessionTurns(owner: ChatKey): readonly SessionTurn[] {
     return this.sessions.history(owner);
+  }
+
+  /** This chat's durable command history, newest first. Never another chat's. */
+  commandHistory(owner: ChatKey, limit = 10): readonly HistoryEntry[] {
+    return this.commands.list(owner, limit);
+  }
+
+  /** The message /repeat would re-run, or undefined if there is nothing to repeat. */
+  repeatable(owner: ChatKey): HistoryEntry | undefined {
+    return this.commands.lastRepeatable(owner);
+  }
+
+  /**
+   * Re-run the last command in this chat.
+   *
+   * Deliberately re-enters handleCommand with the ORIGINAL user message rather
+   * than replaying the stored shell command. That keeps one pipeline: the
+   * Supervisor parses it again and the approval gate re-applies, so repeating
+   * a production deploy still asks. Replaying the shell string directly would
+   * quietly route around both.
+   */
+  async repeat(
+    owner: ChatKey,
+    onProgress: ProgressReporter,
+    options: HandleOptions = {},
+  ): Promise<CommandResult> {
+    const entry = this.commands.lastRepeatable(owner);
+    if (entry === undefined) {
+      return { status: 'rejected', reason: 'Nothing to repeat in this chat yet.' };
+    }
+    return this.handleCommand(entry.userMessage, onProgress, { ...options, owner });
   }
 
   /** The last command this chat ran, for "run that again". */
@@ -344,7 +389,9 @@ export class VigylDaemon {
 
   /** Forget one chat's history. */
   forget(owner: ChatKey): boolean {
-    return this.sessions.clear(owner);
+    const hadHistory = this.commands.clear(owner);
+    const hadSession = this.sessions.clear(owner);
+    return hadHistory || hadSession;
   }
 
   /**
@@ -380,6 +427,14 @@ export class VigylDaemon {
     const output = 'output' in result ? result.output : undefined;
 
     const commandId = 'commandId' in result ? result.commandId : undefined;
+
+    this.commands.record(owner, {
+      userMessage,
+      status: result.status,
+      ...(command === undefined ? {} : { command }),
+      ...(exitCode === undefined ? {} : { exitCode }),
+      ...(commandId === undefined ? {} : { commandId }),
+    });
 
     this.sessions.record(owner, {
       userMessage,

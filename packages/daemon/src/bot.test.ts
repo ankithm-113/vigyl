@@ -17,6 +17,7 @@ import {
   retryDecision,
   stripHtml,
   CALLBACK_LOG,
+  renderHistory,
 } from './bot';
 import type { CommandResult } from './daemon';
 
@@ -470,5 +471,50 @@ describe('full log retrieval', () => {
   it('keeps the log payload inside the callback_data budget', () => {
     const payload = CALLBACK_LOG + ':a1b2c3d4';
     assert.ok(Buffer.byteLength(payload, 'utf-8') <= 64);
+  });
+});
+
+describe('renderHistory', () => {
+  it('says so plainly when there is nothing yet', () => {
+    assert.match(renderHistory([]), /No commands yet/);
+  });
+
+  it('lists commands with status, text and log id', () => {
+    const text = renderHistory([
+      {
+        at: Date.UTC(2026, 6, 27, 12, 0),
+        userMessage: 'deploy to staging',
+        command: 'npm run deploy:staging',
+        status: 'completed',
+        exitCode: 0,
+        commandId: 'a1b2c3d4',
+      },
+    ]);
+
+    assert.match(text, /deploy to staging/);
+    assert.match(text, /npm run deploy:staging/);
+    assert.match(text, /a1b2c3d4/);
+    assert.match(text, /✅/);
+  });
+
+  it('escapes history text so a command cannot inject markup', () => {
+    const text = renderHistory([
+      { at: 0, userMessage: '<script>alert(1)</script>', status: 'failed' },
+    ]);
+
+    assert.ok(!text.includes('<script>'));
+    assert.match(text, /&lt;script&gt;/);
+  });
+
+  it('stays within the Telegram message limit', () => {
+    const many = Array.from({ length: 100 }, (_unused, i) => ({
+      at: Date.now(),
+      userMessage: 'command number ' + i + ' with a fairly long description attached',
+      command: 'npm run something-with-a-long-name-' + i,
+      status: 'completed' as const,
+      commandId: 'a1b2c3d4',
+    }));
+
+    assert.ok(renderHistory(many).length <= TELEGRAM_MAX_MESSAGE);
   });
 });

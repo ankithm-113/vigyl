@@ -71,7 +71,7 @@ async function startedDaemon(
   supervisor: FakeSupervisor,
   config: VigylConfig = makeConfig(),
 ): Promise<VigylDaemon> {
-  const daemon = new VigylDaemon(config, { supervisor: supervisor as unknown as Supervisor });
+  const daemon = new VigylDaemon(config, { supervisor: supervisor as unknown as Supervisor, stateDir: path.join(workspace, ".vigyl") });
   await daemon.start();
   return daemon;
 }
@@ -89,6 +89,7 @@ describe('lifecycle', () => {
   it('reports status before and after start', async () => {
     const daemon = new VigylDaemon(makeConfig(), {
       supervisor: new FakeSupervisor([]) as unknown as Supervisor,
+      stateDir: path.join(workspace, ".vigyl"),
     });
 
     assert.equal(daemon.status.running, false);
@@ -104,6 +105,7 @@ describe('lifecycle', () => {
   it('refuses to handle a command before it is started', async () => {
     const daemon = new VigylDaemon(makeConfig(), {
       supervisor: new FakeSupervisor([command()]) as unknown as Supervisor,
+      stateDir: path.join(workspace, ".vigyl"),
     });
 
     await assert.rejects(() => daemon.handleCommand('build', noop), DaemonNotStartedError);
@@ -122,6 +124,7 @@ describe('lifecycle', () => {
     const config = makeConfig();
     const daemon = new VigylDaemon(config, {
       supervisor: new FakeSupervisor([]) as unknown as Supervisor,
+      stateDir: path.join(workspace, ".vigyl"),
     });
     fs.rmSync(workspace, { recursive: true, force: true });
 
@@ -323,6 +326,7 @@ describe('integration: real executor, real self-healing', () => {
     const daemon = new VigylDaemon(config, {
       supervisor: supervisor as unknown as Supervisor,
       executor: new Executor(config),
+      stateDir: path.join(workspace, '.vigyl'),
     });
     await daemon.start();
 
@@ -348,6 +352,7 @@ describe('integration: real executor, real self-healing', () => {
     const daemon = new VigylDaemon(config, {
       supervisor: supervisor as unknown as Supervisor,
       executor: new Executor(config),
+      stateDir: path.join(workspace, '.vigyl'),
     });
     await daemon.start();
 
@@ -379,6 +384,7 @@ describe('integration: real executor, real self-healing', () => {
     const daemon = new VigylDaemon(config, {
       supervisor: supervisor as unknown as Supervisor,
       executor: new Executor(config),
+      stateDir: path.join(workspace, '.vigyl'),
     });
     await daemon.start();
 
@@ -402,6 +408,7 @@ describe('integration: real executor, real self-healing', () => {
     const daemon = new VigylDaemon(config, {
       supervisor: supervisor as unknown as Supervisor,
       executor: new Executor(config),
+      stateDir: path.join(workspace, '.vigyl'),
     });
     await daemon.start();
 
@@ -464,10 +471,10 @@ describe('session context', () => {
     await daemon.handleCommand('alice', noop, { owner: 111 });
     await daemon.handleCommand('bob', noop, { owner: 222 });
 
-    assert.equal(daemon.history(111).length, 1);
-    assert.equal(daemon.history(222).length, 1);
-    assert.equal(daemon.history(111)[0]?.userMessage, 'alice');
-    assert.equal(daemon.history(222)[0]?.userMessage, 'bob');
+    assert.equal(daemon.sessionTurns(111).length, 1);
+    assert.equal(daemon.sessionTurns(222).length, 1);
+    assert.equal(daemon.sessionTurns(111)[0]?.userMessage, 'alice');
+    assert.equal(daemon.sessionTurns(222)[0]?.userMessage, 'bob');
     await daemon.stop();
   });
 
@@ -479,7 +486,7 @@ describe('session context', () => {
 
     await daemon.handleCommand('clean up', noop, { owner: 111 });
 
-    const history = daemon.history(111);
+    const history = daemon.sessionTurns(111);
     assert.equal(history.length, 1);
     assert.equal(history[0]?.status, 'rejected');
     await daemon.stop();
@@ -505,10 +512,67 @@ describe('session context', () => {
     await daemon.handleCommand('bob', noop, { owner: 222 });
 
     assert.equal(daemon.forget(111), true);
-    assert.equal(daemon.history(111).length, 0);
-    assert.equal(daemon.history(222).length, 1);
+    assert.equal(daemon.sessionTurns(111).length, 0);
+    assert.equal(daemon.sessionTurns(222).length, 1);
 
     await daemon.stop();
-    assert.equal(daemon.history(222).length, 0);
+    assert.equal(daemon.sessionTurns(222).length, 0);
+  });
+});
+
+describe('repeat', () => {
+  it('re-enters the supervisor pipeline instead of replaying the shell string', async () => {
+    const supervisor = new FakeSupervisor([command(), command()]);
+    const daemon = await startedDaemon(supervisor);
+    await daemon.handleCommand('build the api', noop, { owner: 111 });
+
+    const result = await daemon.repeat(111, noop);
+
+    assert.equal(result.status, 'completed');
+    // Two parses: the original and the repeat. Replaying the stored shell
+    // command directly would have skipped the second.
+    assert.equal(supervisor.parseCalls, 2);
+    await daemon.stop();
+  });
+
+  it('re-applies the approval gate when repeating a destructive command', async () => {
+    const supervisor = new FakeSupervisor([
+      command({ command: 'npm run deploy:production', requiresApproval: true }),
+      command({ command: 'npm run deploy:production', requiresApproval: true }),
+    ]);
+    const daemon = await startedDaemon(supervisor);
+
+    const first = await daemon.handleCommand('deploy to production', noop, { owner: 111 });
+    assert.equal(first.status, 'approval_required');
+    if (first.status !== 'approval_required') throw new Error('narrowing');
+    await daemon.approve(first.approvalId, noop, { owner: 111 });
+
+    const repeated = await daemon.repeat(111, noop);
+
+    // The whole point: repeating a production deploy still asks.
+    assert.equal(repeated.status, 'approval_required');
+    await daemon.stop();
+  });
+
+  it('reports there is nothing to repeat in a fresh chat', async () => {
+    const daemon = await startedDaemon(new FakeSupervisor([]));
+
+    const result = await daemon.repeat(111, noop);
+
+    assert.equal(result.status, 'rejected');
+    await daemon.stop();
+  });
+
+  it('keeps durable history isolated per chat', async () => {
+    const supervisor = new FakeSupervisor([command(), command()]);
+    const daemon = await startedDaemon(supervisor);
+
+    await daemon.handleCommand('alice', noop, { owner: 111 });
+    await daemon.handleCommand('bob', noop, { owner: 222 });
+
+    assert.equal(daemon.commandHistory(111).length, 1);
+    assert.equal(daemon.commandHistory(111)[0]?.userMessage, 'alice');
+    assert.equal(daemon.commandHistory(222)[0]?.userMessage, 'bob');
+    await daemon.stop();
   });
 });
