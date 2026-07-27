@@ -16,6 +16,7 @@ import {
   createFloodControl,
   retryDecision,
   stripHtml,
+  CALLBACK_LOG,
 } from './bot';
 import type { CommandResult } from './daemon';
 
@@ -394,5 +395,80 @@ describe('stripHtml', () => {
     const nl = String.fromCharCode(10);
     const html = '✅ <b>Done</b>' + nl + '<pre>a &lt; b &amp; c</pre>';
     assert.equal(stripHtml(html), '✅ Done' + nl + 'a < b & c');
+  });
+});
+describe('full log retrieval', () => {
+  it('offers a view-full-log button when output was truncated', () => {
+    const rendered = renderResult({
+      status: 'completed',
+      command: 'npm run build',
+      description: 'Build.',
+      attempts: 1,
+      exitCode: 0,
+      output: 'noise'.repeat(5_000),
+      commandId: 'a1b2c3d4',
+      patches: [],
+    });
+
+    assert.ok(rendered.keyboard !== undefined);
+    assert.match(JSON.stringify(rendered.keyboard), /log:a1b2c3d4/);
+  });
+
+  it('does not offer the button when nothing was withheld', () => {
+    // Pressing it would return the same text; a dead end for the user.
+    const rendered = renderResult({
+      status: 'completed',
+      command: 'npm run build',
+      description: 'Build.',
+      attempts: 1,
+      exitCode: 0,
+      output: 'short output',
+      commandId: 'a1b2c3d4',
+      patches: [],
+    });
+
+    assert.equal(rendered.keyboard, undefined);
+  });
+
+  it('does not offer the button when no log was stored', () => {
+    const rendered = renderResult({
+      status: 'completed',
+      command: 'npm run build',
+      description: 'Build.',
+      attempts: 1,
+      exitCode: 0,
+      output: 'noise'.repeat(5_000),
+      patches: [],
+    });
+
+    assert.equal(rendered.keyboard, undefined);
+  });
+
+  it('offers it on a failure too, where the log matters most', () => {
+    const rendered = renderResult({
+      status: 'failed',
+      command: 'npm run build',
+      description: 'Build.',
+      attempts: 4,
+      exitCode: 1,
+      reason: 'retries_exhausted',
+      output: 'error '.repeat(2_000),
+      commandId: 'deadbeef',
+      patches: [],
+    });
+
+    assert.match(JSON.stringify(rendered.keyboard), /log:deadbeef/);
+  });
+
+  it('parses a log callback payload', () => {
+    assert.deepEqual(parseCallbackData(CALLBACK_LOG + ':a1b2c3d4'), {
+      action: 'log',
+      approvalId: 'a1b2c3d4',
+    });
+  });
+
+  it('keeps the log payload inside the callback_data budget', () => {
+    const payload = CALLBACK_LOG + ':a1b2c3d4';
+    assert.ok(Buffer.byteLength(payload, 'utf-8') <= 64);
   });
 });

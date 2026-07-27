@@ -19,7 +19,7 @@
  *      second per chat, and the guide edits on every callback — which earns a
  *      429 partway through a noisy build and loses the rest of the updates.
  */
-import { Bot, GrammyError, HttpError, InlineKeyboard } from 'grammy';
+import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import { logger } from './logger';
 import type { CommandResult } from './daemon';
@@ -38,6 +38,10 @@ const PROGRESS_WINDOW = 8;
 
 export const CALLBACK_APPROVE = 'approve';
 export const CALLBACK_DENY = 'deny';
+export const CALLBACK_LOG = 'log';
+
+/** Above this, a log is sent as a file rather than squeezed into a message. */
+export const LOG_AS_FILE_THRESHOLD = 3_000;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for testing)
@@ -107,7 +111,10 @@ export function renderResult(result: CommandResult): RenderedMessage {
       }
       const output = truncateOutput(result.output);
       if (output !== '') lines.push(codeBlock(output));
-      return { text: clampMessage(lines.join('\n')) };
+      return {
+        text: clampMessage(lines.join(String.fromCharCode(10))),
+        ...logKeyboard(result.commandId, result.output, output),
+      };
     }
 
     case 'failed': {
@@ -122,7 +129,10 @@ export function renderResult(result: CommandResult): RenderedMessage {
       }
       const output = truncateOutput(result.output, 1_500);
       if (output !== '') lines.push(codeBlock(output));
-      return { text: clampMessage(lines.join('\n')) };
+      return {
+        text: clampMessage(lines.join(String.fromCharCode(10))),
+        ...logKeyboard(result.commandId, result.output, output),
+      };
     }
 
     case 'approval_required': {
@@ -160,6 +170,24 @@ export function renderResult(result: CommandResult): RenderedMessage {
   }
 }
 
+/**
+ * A "view full log" button, but only when it would show something new.
+ *
+ * Offering it on output that was already shown in full is a dead end for the
+ * user — they press it and get the same text back.
+ */
+function logKeyboard(
+  commandId: string | undefined,
+  full: string,
+  shown: string,
+): { keyboard?: InlineKeyboard } {
+  if (commandId === undefined) return {};
+  if (full.trim().length <= shown.length) return {};
+  return {
+    keyboard: new InlineKeyboard().text('📄 View full log', `${CALLBACK_LOG}:${commandId}`),
+  };
+}
+
 /** Plain-English gloss for a StopReason, so the user knows what to do next. */
 export function explainStopReason(reason: StopReason): string {
   switch (reason) {
@@ -187,7 +215,7 @@ export function explainStopReason(reason: StopReason): string {
 /** Split a callback_data payload. Returns undefined when it is not ours. */
 export function parseCallbackData(
   data: string | undefined,
-): { action: 'approve' | 'deny'; approvalId: string } | undefined {
+): { action: 'approve' | 'deny' | 'log'; approvalId: string } | undefined {
   if (data === undefined) return undefined;
   const separator = data.indexOf(':');
   if (separator < 0) return undefined;
@@ -196,6 +224,7 @@ export function parseCallbackData(
   if (approvalId === '') return undefined;
   if (action === CALLBACK_APPROVE) return { action: 'approve', approvalId };
   if (action === CALLBACK_DENY) return { action: 'deny', approvalId };
+  if (action === CALLBACK_LOG) return { action: 'log', approvalId };
   return undefined;
 }
 
@@ -393,6 +422,7 @@ export class TelegramInterface {
     this.warnAboutGroupChats();
     this.installAuth();
     this.installCommands();
+    this.installLogsCommand();
     this.installApprovalButtons();
     this.installNaturalLanguage();
     this.installErrorHandler();
@@ -472,6 +502,62 @@ export class TelegramInterface {
     });
   }
 
+  private installLogsCommand(): void {
+    this.bot.command('logs', async (ctx) => {
+      const argument = ctx.match.trim();
+      const owner = ctx.chat.id;
+
+      // No id means "the last thing I ran", which is what people mean.
+      const commandId = argument === '' ? this.daemon.lastCommandId(owner) : argument;
+
+      if (commandId === undefined) {
+        await ctx.reply('No commands with saved output in this chat yet.');
+        return;
+      }
+      await this.deliverLog(ctx, commandId);
+    });
+  }
+
+  /**
+   * Send a stored log, as a message when small and a file when not.
+   *
+   * The id is user input either way — typed after /logs, or lifted from a
+   * button's callback_data. The daemon validates it before it becomes a path,
+   * and an unknown id is reported the same as a malformed one so probing
+   * teaches nothing.
+   */
+  private async deliverLog(ctx: Context, commandId: string): Promise<void> {
+    const stored = this.daemon.readLog(commandId);
+
+    if (stored === undefined) {
+      await ctx.reply('That log is not available — it may have been pruned, or the ID is wrong.');
+      return;
+    }
+
+    if (stored.text.length <= LOG_AS_FILE_THRESHOLD) {
+      await ctx.reply(codeBlock(stored.text), { parse_mode: 'HTML' }).catch(async () => {
+        await ctx.reply(stored.text).catch(() => undefined);
+      });
+      return;
+    }
+
+    try {
+      // A file keeps the whole thing intact instead of paginating a build log
+      // across a dozen messages.
+      await ctx.replyWithDocument(
+        new InputFile(Buffer.from(stored.text, 'utf-8'), `vigyl-${commandId}.log`),
+        { caption: `Full output (${Math.ceil(stored.bytes / 1024)} KB)` },
+      );
+    } catch (err) {
+      logger.warn('Could not send the log as a document; falling back to text', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      await ctx
+        .reply(codeBlock(truncateOutput(stored.text, 3_500)), { parse_mode: 'HTML' })
+        .catch(() => undefined);
+    }
+  }
+
   private installApprovalButtons(): void {
     this.bot.on('callback_query:data', async (ctx) => {
       const parsed = parseCallbackData(ctx.callbackQuery.data);
@@ -481,6 +567,12 @@ export class TelegramInterface {
       }
 
       const owner = ctx.chat?.id;
+
+      if (parsed.action === 'log') {
+        await ctx.answerCallbackQuery({ text: 'Fetching the full log...' });
+        await this.deliverLog(ctx, parsed.approvalId);
+        return;
+      }
 
       if (parsed.action === 'deny') {
         const existed = this.daemon.deny(parsed.approvalId, { owner });
@@ -661,6 +753,9 @@ const HELP = `<b>Vigyl command reference</b>
 <b>Services</b>
 • Restart the API service
 • Is Redis running?
+
+/logs — full output of your last command
+/logs &lt;id&gt; — a specific command
 
 Anything destructive shows Approve / Deny buttons.
 If a build fails, I will try to fix it and run it again.`;

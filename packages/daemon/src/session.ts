@@ -50,6 +50,8 @@ export interface SessionTurn {
   exitCode?: number;
   /** Tail of the command output. Truncated and sanitized. */
   outputTail?: string;
+  /** Handle for retrieving the full output from the log store. */
+  commandId?: string;
 }
 
 export interface SessionOptions {
@@ -132,6 +134,7 @@ export class SessionStore {
         ? {}
         : { description: sanitize(turn.description, MAX_MESSAGE_CHARS) }),
       ...(turn.exitCode === undefined ? {} : { exitCode: turn.exitCode }),
+      ...(turn.commandId === undefined ? {} : { commandId: turn.commandId }),
       ...(turn.outputTail === undefined || turn.outputTail.trim() === ''
         ? {}
         : { outputTail: sanitize(turn.outputTail, this.maxOutputChars) }),

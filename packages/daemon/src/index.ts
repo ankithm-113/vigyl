@@ -36,6 +36,14 @@ export {
 } from './config';
 
 export {
+  CommandLogStore,
+  isValidCommandId,
+  type LogMetadata,
+  type LogStoreOptions,
+  type StoredLog,
+} from './log-store';
+
+export {
   DEFAULT_CONTEXT_TURNS,
   SessionStore,
   sanitize,
@@ -56,6 +64,8 @@ export {
 export {
   CALLBACK_APPROVE,
   CALLBACK_DENY,
+  CALLBACK_LOG,
+  LOG_AS_FILE_THRESHOLD,
   TELEGRAM_MAX_MESSAGE,
   TelegramInterface,
   clampMessage,

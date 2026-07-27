@@ -22,10 +22,13 @@
  * runs.
  */
 import * as fs from 'fs';
+import * as path from 'path';
 import { ApprovalStore, approvalReasons, type ApprovalOwner } from './hitl';
 import { Executor } from './executor';
-import { logger } from './logger';
+
 import { SecurityError, SecurityLayer } from './security';
+import { CommandLogStore, type StoredLog } from './log-store';
+import { LOG_DIR, logger } from './logger';
 import { SessionStore, type ChatKey, type SessionTurn } from './session';
 import { SelfHealingLoop, type AppliedPatch, type ProgressReporter, type StopReason } from './self-heal';
 import { Supervisor, SupervisorError, type ParsedCommand } from './supervisor';
@@ -44,6 +47,8 @@ export type CommandStatus =
 
 export interface CompletedResult {
   status: 'completed';
+  /** Handle for retrieving the untruncated output, when one was stored. */
+  commandId?: string;
   command: string;
   description: string;
   attempts: number;
@@ -54,6 +59,8 @@ export interface CompletedResult {
 
 export interface FailedResult {
   status: 'failed';
+  /** Handle for retrieving the untruncated output, when one was stored. */
+  commandId?: string;
   command: string;
   description: string;
   attempts: number;
@@ -146,6 +153,7 @@ export class VigylDaemon {
   private readonly selfHeal: SelfHealingLoop;
   private readonly approvals: ApprovalStore;
   private readonly sessions = new SessionStore();
+  private readonly logs: CommandLogStore;
 
   private running = false;
   private startedAt: number | undefined;
@@ -157,6 +165,8 @@ export class VigylDaemon {
     this.supervisor = parts.supervisor ?? new Supervisor(config);
     this.selfHeal = new SelfHealingLoop(this.executor, this.supervisor, config);
     this.approvals = new ApprovalStore(config.hitl.timeout_seconds);
+    // Under .vigyl/logs, alongside daemon.log, so one directory holds all output.
+    this.logs = new CommandLogStore(path.join(LOG_DIR, 'commands'));
   }
 
   // -------------------------------------------------------------------------
@@ -337,6 +347,27 @@ export class VigylDaemon {
     return this.sessions.clear(owner);
   }
 
+  /**
+   * Fetch a stored log by id.
+   *
+   * The id is user input; CommandLogStore validates it before it becomes a
+   * path. Returning undefined for both "unknown" and "malformed" is
+   * deliberate — an attacker probing ids learns nothing from the difference.
+   */
+  readLog(commandId: string): StoredLog | undefined {
+    return this.logs.read(commandId);
+  }
+
+  /** The id of the most recent command in this chat that produced output. */
+  lastCommandId(owner: ChatKey): string | undefined {
+    const turns = this.sessions.history(owner);
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const id = turns[i]?.commandId;
+      if (id !== undefined) return id;
+    }
+    return undefined;
+  }
+
   /** Store the outcome so the next message in this chat has context. */
   private remember(owner: ChatKey | undefined, userMessage: string, result: CommandResult): void {
     // No owner means no session. A shared bucket for anonymous callers would
@@ -348,9 +379,12 @@ export class VigylDaemon {
     const exitCode = 'exitCode' in result ? result.exitCode : undefined;
     const output = 'output' in result ? result.output : undefined;
 
+    const commandId = 'commandId' in result ? result.commandId : undefined;
+
     this.sessions.record(owner, {
       userMessage,
       status: result.status,
+      ...(commandId === undefined ? {} : { commandId }),
       ...(command === undefined ? {} : { command }),
       ...(description === undefined ? {} : { description }),
       ...(exitCode === undefined ? {} : { exitCode }),
@@ -362,9 +396,17 @@ export class VigylDaemon {
     try {
       const heal = await this.selfHeal.runWithHealing(parsed.command, onProgress);
 
+      const commandId = this.logs.write(heal.output, {
+        command: parsed.command,
+        exitCode: heal.finalExitCode,
+        attempts: heal.attempts,
+        at: Date.now(),
+      });
+
       if (heal.success) {
         return {
           status: 'completed',
+          ...(commandId === undefined ? {} : { commandId }),
           command: parsed.command,
           description: parsed.description,
           attempts: heal.attempts,
@@ -376,6 +418,7 @@ export class VigylDaemon {
 
       return {
         status: 'failed',
+        ...(commandId === undefined ? {} : { commandId }),
         command: parsed.command,
         description: parsed.description,
         attempts: heal.attempts,
