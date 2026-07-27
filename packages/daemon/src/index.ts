@@ -36,6 +36,21 @@ export {
 } from './config';
 
 export {
+  AlertThrottle,
+  DEFAULT_THRESHOLDS,
+  HealthMonitor,
+  collectMetrics,
+  diskUsagePercent,
+  evaluate,
+  memoryUsagePercent,
+  sampleCpuPercent,
+  type HealthAlert,
+  type HealthMetrics,
+  type HealthThresholds,
+  type MetricId,
+} from './health';
+
+export {
   HistoryStore,
   type HistoryEntry,
   type HistoryOptions,
@@ -79,6 +94,8 @@ export {
   explainStopReason,
   isAuthorized,
   parseCallbackData,
+  renderHealthAlert,
+  renderHealthSnapshot,
   renderHistory,
   renderResult,
   truncateOutput,

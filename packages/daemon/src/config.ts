@@ -119,6 +119,19 @@ export const VigylConfigSchema = z
       .strict()
       .default({}),
 
+    monitor: z
+      .object({
+        enabled: z.boolean().default(true),
+        interval_seconds: z.number().int().positive('must be greater than 0').default(300),
+        /** How long a firing metric stays quiet before it is reported again. */
+        cooldown_seconds: z.number().int().min(0, 'must not be negative').default(3600),
+        cpu_percent: z.number().min(1).max(100).default(90),
+        memory_percent: z.number().min(1).max(100).default(90),
+        disk_percent: z.number().min(1).max(100).default(85),
+      })
+      .strict()
+      .default({}),
+
     daemon: z
       .object({
         log_level: z.enum(LOG_LEVELS).default('info'),
@@ -140,6 +153,7 @@ const ENV_HINTS: Readonly<Record<string, string>> = {
   'anthropic.model': 'VIGYL_MODEL',
   'daemon.log_level': 'VIGYL_LOG_LEVEL',
   'hitl.timeout_seconds': 'VIGYL_HITL_TIMEOUT_SECONDS',
+  'monitor.interval_seconds': 'VIGYL_MONITOR_INTERVAL_SECONDS',
 };
 
 function formatIssues(error: z.ZodError, source: string): ConfigError {
@@ -336,6 +350,14 @@ export function getDefaultConfig(workspaceRoot: string): Record<string, unknown>
       timeout_seconds: 300,
     },
     self_heal: { enabled: true, max_retries: 3, context_lines: 80 },
+    monitor: {
+      enabled: true,
+      interval_seconds: 300,
+      cooldown_seconds: 3600,
+      cpu_percent: 90,
+      memory_percent: 90,
+      disk_percent: 85,
+    },
     daemon: { log_level: 'info', log_retention_days: 7 },
   };
 }

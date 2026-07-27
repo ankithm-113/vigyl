@@ -62,6 +62,14 @@ function makeConfig(overrides: Partial<VigylConfig> = {}): VigylConfig {
     anthropic: { api_key: 'sk-ant-test', model: 'claude-haiku-4-5' },
     hitl: { require_for: ['production', 'delete', 'push'], timeout_seconds: 300 },
     self_heal: { enabled: true, max_retries: 3, context_lines: 80 },
+    monitor: {
+      enabled: false,
+      interval_seconds: 300,
+      cooldown_seconds: 3600,
+      cpu_percent: 90,
+      memory_percent: 90,
+      disk_percent: 85,
+    },
     daemon: { log_level: 'error', log_retention_days: 7 },
     ...overrides,
   };
@@ -573,6 +581,80 @@ describe('repeat', () => {
     assert.equal(daemon.commandHistory(111).length, 1);
     assert.equal(daemon.commandHistory(111)[0]?.userMessage, 'alice');
     assert.equal(daemon.commandHistory(222)[0]?.userMessage, 'bob');
+    await daemon.stop();
+  });
+});
+
+describe('health monitoring lifecycle', () => {
+  function monitoringConfig(): VigylConfig {
+    const base = makeConfig();
+    return {
+      ...base,
+      monitor: { ...base.monitor, enabled: true, interval_seconds: 1, cooldown_seconds: 0 },
+    };
+  }
+
+  it('starts the monitor with the daemon and clears it on stop', async () => {
+    const daemon = await startedDaemon(new FakeSupervisor([]), monitoringConfig());
+
+    assert.equal(daemon.monitorRunning, true);
+
+    await daemon.stop();
+
+    // The explicit requirement: no timer may outlive stop(), or the process
+    // never exits.
+    assert.equal(daemon.monitorRunning, false);
+  });
+
+  it('does not start the monitor when it is disabled in config', async () => {
+    const daemon = await startedDaemon(new FakeSupervisor([]));
+
+    assert.equal(daemon.monitorRunning, false);
+    await daemon.stop();
+  });
+
+  it('toggles per chat and forgets subscribers on stop', async () => {
+    const daemon = await startedDaemon(new FakeSupervisor([]), monitoringConfig());
+
+    assert.equal(daemon.enableMonitoring(111), true);
+    assert.equal(daemon.enableMonitoring(111), false);
+    assert.equal(daemon.isMonitoring(111), true);
+    assert.equal(daemon.isMonitoring(222), false, "opt-in is per chat");
+
+    assert.equal(daemon.disableMonitoring(111), true);
+    assert.equal(daemon.isMonitoring(111), false);
+
+    await daemon.stop();
+  });
+
+  it('delivers alerts only to chats that opted in', async () => {
+    const config = monitoringConfig();
+    const daemon = await startedDaemon(new FakeSupervisor([]), {
+      ...config,
+      monitor: { ...config.monitor, cpu_percent: 1, memory_percent: 1, disk_percent: 1 },
+    });
+
+    const delivered: number[][] = [];
+    daemon.onHealthAlerts((chatIds) => delivered.push([...chatIds]));
+    daemon.enableMonitoring(111);
+
+    await daemon.runHealthCheck();
+
+    assert.equal(delivered.length, 1);
+    assert.deepEqual(delivered[0], [111]);
+    await daemon.stop();
+  });
+
+  it('reports a snapshot without notifying anyone', async () => {
+    const daemon = await startedDaemon(new FakeSupervisor([]), monitoringConfig());
+    const delivered: number[][] = [];
+    daemon.onHealthAlerts((chatIds) => delivered.push([...chatIds]));
+    daemon.enableMonitoring(111);
+
+    const { metrics } = await daemon.healthSnapshot();
+
+    assert.ok(metrics.cpuPercent >= 0);
+    assert.equal(delivered.length, 0);
     await daemon.stop();
   });
 });

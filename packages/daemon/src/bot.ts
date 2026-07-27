@@ -22,6 +22,7 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile } from 'grammy';
 import type { Context } from 'grammy';
 import { logger } from './logger';
+import type { HealthAlert, HealthMetrics } from './health';
 import type { HistoryEntry } from './history';
 import type { CommandResult } from './daemon';
 import type { VigylDaemon } from './daemon';
@@ -187,6 +188,36 @@ function logKeyboard(
   return {
     keyboard: new InlineKeyboard().text('📄 View full log', `${CALLBACK_LOG}:${commandId}`),
   };
+}
+
+/** Render a health alert push. Pure; no Telegram calls. */
+export function renderHealthAlert(alerts: readonly HealthAlert[]): string {
+  const lines = ['🚨 <b>Health alert</b>', ''];
+  for (const alert of alerts) lines.push(`• ${escapeHtml(alert.message)}`);
+  lines.push('', '<i>/monitor off to stop these.</i>');
+  return clampMessage(lines.join(String.fromCharCode(10)));
+}
+
+/** Render the current readings for /monitor status. */
+export function renderHealthSnapshot(
+  metrics: HealthMetrics,
+  alerts: readonly HealthAlert[],
+  subscribed: boolean,
+): string {
+  const disk = metrics.diskPercent === undefined ? 'unavailable' : `${metrics.diskPercent}%`;
+  const lines = [
+    '<b>System health</b>',
+    '',
+    `CPU:    ${metrics.cpuPercent}%`,
+    `Memory: ${metrics.memoryPercent}%`,
+    `Disk:   ${escapeHtml(disk)}`,
+    '',
+    alerts.length === 0
+      ? '✅ Everything within thresholds.'
+      : `⚠️ ${alerts.length} threshold(s) breached.`,
+    subscribed ? 'Alerts are ON for this chat.' : 'Alerts are OFF for this chat.',
+  ];
+  return clampMessage(lines.join(String.fromCharCode(10)));
 }
 
 /** Status glyphs for the history list. */
@@ -455,6 +486,8 @@ export class TelegramInterface {
     this.warnAboutGroupChats();
     this.installAuth();
     this.installCommands();
+    this.installMonitorCommand();
+    this.installHealthAlerts();
     this.installHistoryCommands();
     this.installLogsCommand();
     this.installApprovalButtons();
@@ -533,6 +566,61 @@ export class TelegramInterface {
         lines.push(`${status.pendingApprovals} approval(s) waiting.`);
       }
       await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+    });
+  }
+
+  private installMonitorCommand(): void {
+    this.bot.command('monitor', async (ctx) => {
+      const argument = ctx.match.trim().toLowerCase();
+      const chatId = ctx.chat.id;
+
+      if (argument === 'on') {
+        const added = this.daemon.enableMonitoring(chatId);
+        await ctx.reply(
+          added
+            ? '🔔 Health alerts are ON for this chat.'
+            : '🔔 Health alerts were already on for this chat.',
+        );
+        return;
+      }
+
+      if (argument === 'off') {
+        const removed = this.daemon.disableMonitoring(chatId);
+        await ctx.reply(
+          removed ? '🔕 Health alerts are OFF for this chat.' : '🔕 They were not on.',
+        );
+        return;
+      }
+
+      if (argument === '' || argument === 'status') {
+        const { metrics, alerts } = await this.daemon.healthSnapshot();
+        await ctx.reply(renderHealthSnapshot(metrics, alerts, this.daemon.isMonitoring(chatId)), {
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      await ctx.reply('Usage: /monitor on | off | status');
+    });
+  }
+
+  /**
+   * Deliver alerts to the chats that opted in.
+   *
+   * Fire-and-forget per chat: one blocked or deleted chat must not stop the
+   * others from being told the disk is full.
+   */
+  private installHealthAlerts(): void {
+    this.daemon.onHealthAlerts((chatIds, alerts) => {
+      const text = renderHealthAlert(alerts);
+      for (const chatId of chatIds) {
+        this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML' }).catch((err: unknown) => {
+          logger.warn('Could not deliver a health alert', {
+            chatId,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
     });
   }
 
@@ -821,6 +909,7 @@ const HELP = `<b>Vigyl command reference</b>
 • Restart the API service
 • Is Redis running?
 
+/monitor on|off|status — health alerts
 /history — recent commands
 /repeat — run the last one again
 /logs — full output of your last command

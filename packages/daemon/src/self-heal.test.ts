@@ -81,6 +81,14 @@ function makeConfig(overrides: Partial<VigylConfig['self_heal']> = {}): VigylCon
     anthropic: { api_key: 'sk-ant-test', model: 'claude-haiku-4-5' },
     hitl: { require_for: ['production'], timeout_seconds: 300 },
     self_heal: { enabled: true, max_retries: 3, context_lines: 80, ...overrides },
+    monitor: {
+      enabled: false,
+      interval_seconds: 300,
+      cooldown_seconds: 3600,
+      cpu_percent: 90,
+      memory_percent: 90,
+      disk_percent: 85,
+    },
     daemon: { log_level: 'error', log_retention_days: 7 },
   };
 }

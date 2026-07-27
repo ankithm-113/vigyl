@@ -18,6 +18,8 @@ import {
   stripHtml,
   CALLBACK_LOG,
   renderHistory,
+  renderHealthAlert,
+  renderHealthSnapshot,
 } from './bot';
 import type { CommandResult } from './daemon';
 
@@ -516,5 +518,53 @@ describe('renderHistory', () => {
     }));
 
     assert.ok(renderHistory(many).length <= TELEGRAM_MAX_MESSAGE);
+  });
+});
+
+describe('health rendering', () => {
+  it('lists every breached metric in an alert', () => {
+    const text = renderHealthAlert([
+      { metric: 'cpu', value: 95, threshold: 90, message: 'CPU at 95% (threshold 90%)' },
+      { metric: 'disk', value: 91, threshold: 85, message: 'Disk at 91% (threshold 85%)' },
+    ]);
+
+    assert.match(text, /CPU at 95%/);
+    assert.match(text, /Disk at 91%/);
+    assert.match(text, /monitor off/);
+  });
+
+  it('shows readings and opt-in state in a snapshot', () => {
+    const text = renderHealthSnapshot(
+      { cpuPercent: 12, memoryPercent: 34, diskPercent: 56, at: Date.now() },
+      [],
+      true,
+    );
+
+    assert.match(text, /12%/);
+    assert.match(text, /34%/);
+    assert.match(text, /56%/);
+    assert.match(text, /within thresholds/);
+    assert.match(text, /ON for this chat/);
+  });
+
+  it('says so when disk could not be read', () => {
+    const text = renderHealthSnapshot(
+      { cpuPercent: 5, memoryPercent: 5, at: Date.now() },
+      [],
+      false,
+    );
+
+    assert.match(text, /unavailable/);
+    assert.match(text, /OFF for this chat/);
+  });
+
+  it('stays within the Telegram message limit', () => {
+    const many = Array.from({ length: 200 }, () => ({
+      metric: 'cpu' as const,
+      value: 99,
+      threshold: 90,
+      message: 'a fairly long alert message that repeats many times over',
+    }));
+    assert.ok(renderHealthAlert(many).length <= TELEGRAM_MAX_MESSAGE);
   });
 });

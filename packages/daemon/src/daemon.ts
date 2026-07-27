@@ -27,6 +27,7 @@ import { ApprovalStore, approvalReasons, type ApprovalOwner } from './hitl';
 import { Executor } from './executor';
 
 import { SecurityError, SecurityLayer } from './security';
+import { HealthMonitor, type HealthAlert, type HealthMetrics } from './health';
 import { HistoryStore, type HistoryEntry } from './history';
 import { CommandLogStore, type StoredLog } from './log-store';
 import { LOG_DIR, logger } from './logger';
@@ -156,6 +157,8 @@ export class VigylDaemon {
   private readonly sessions = new SessionStore();
   private readonly logs: CommandLogStore;
   private readonly commands: HistoryStore;
+  private readonly monitor: HealthMonitor;
+  private onHealthAlert: ((chatIds: readonly number[], alerts: readonly HealthAlert[]) => void) | undefined;
 
   private running = false;
   private startedAt: number | undefined;
@@ -181,6 +184,18 @@ export class VigylDaemon {
     this.logs = new CommandLogStore(path.join(stateDir, 'logs', 'commands'));
     // Sibling of logs/, so all runtime state lives under one directory.
     this.commands = new HistoryStore(path.join(stateDir, 'history.json'));
+    this.monitor = new HealthMonitor({
+      workspaceRoot: this.security.workspaceRoot,
+      intervalSeconds: config.monitor.interval_seconds,
+      cooldownSeconds: config.monitor.cooldown_seconds,
+      thresholds: {
+        cpuPercent: config.monitor.cpu_percent,
+        memoryPercent: config.monitor.memory_percent,
+        diskPercent: config.monitor.disk_percent,
+      },
+      // Indirection so the bot can register a sender after construction.
+      notify: (chatIds, alerts) => this.onHealthAlert?.(chatIds, alerts),
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -197,6 +212,7 @@ export class VigylDaemon {
 
     this.running = true;
     this.startedAt = Date.now();
+    if (this.config.monitor.enabled) this.monitor.start();
     logger.info('Vigyl daemon started', {
       version: DAEMON_VERSION,
       workspace: this.security.workspaceRoot,
@@ -208,6 +224,9 @@ export class VigylDaemon {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.executor.kill();
+    // Before anything else: an interval that outlives stop() keeps the libuv
+    // loop alive and the process never exits.
+    this.monitor.stop();
     const dropped = this.approvals.clear();
     this.sessions.clearAll();
     this.running = false;
@@ -392,6 +411,41 @@ export class VigylDaemon {
     const hadHistory = this.commands.clear(owner);
     const hadSession = this.sessions.clear(owner);
     return hadHistory || hadSession;
+  }
+
+  /** Register where health alerts should be delivered. */
+  onHealthAlerts(
+    handler: (chatIds: readonly number[], alerts: readonly HealthAlert[]) => void,
+  ): void {
+    this.onHealthAlert = handler;
+  }
+
+  /** Opt a chat into health alerts. */
+  enableMonitoring(chatId: number): boolean {
+    return this.monitor.subscribe(chatId);
+  }
+
+  /** Opt a chat out of health alerts. */
+  disableMonitoring(chatId: number): boolean {
+    return this.monitor.unsubscribe(chatId);
+  }
+
+  isMonitoring(chatId: number): boolean {
+    return this.monitor.isSubscribed(chatId);
+  }
+
+  get monitorRunning(): boolean {
+    return this.monitor.isRunning;
+  }
+
+  /** Current readings, for /monitor status. */
+  async healthSnapshot(): Promise<{ metrics: HealthMetrics; alerts: HealthAlert[] }> {
+    return this.monitor.snapshot();
+  }
+
+  /** Run one health check immediately. Returns the alerts that were sent. */
+  async runHealthCheck(): Promise<HealthAlert[]> {
+    return this.monitor.runCheck();
   }
 
   /**
