@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { VERSION, loadDotenv } from '@vigyl/daemon';
+import { doctor } from './commands/doctor';
 import { init } from './commands/init';
 import { start } from './commands/start';
 import { status } from './commands/status';
@@ -33,6 +34,14 @@ program
   )
   .action(async (options: { nonInteractive?: boolean }) => {
     finish(await init(options));
+  });
+
+program
+  .command('doctor')
+  .description('Check everything Vigyl needs, including live credential checks')
+  .option('--offline', 'skip the checks that need the network or cost tokens')
+  .action(async (options: { offline?: boolean }) => {
+    finish(await doctor(options));
   });
 
 program
