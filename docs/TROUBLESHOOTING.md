@@ -54,10 +54,12 @@ Other reasons it stops early:
 
 | Message | Meaning |
 |---|---|
-| *Claude was not confident enough* | The model declined. A wrong patch overwrites a real file. |
+| *The model was not confident enough* | The model declined. A wrong patch overwrites a real file. |
 | *The same error came back unchanged* | The patch changed nothing observable, so retrying is pointless. |
 | *A proposed fix targeted a file outside the workspace* | Blocked by the sandbox. Worth reading the log. |
-| *rate-limited us before a fix could be generated* | Anthropic rate limit. Try again shortly. |
+| *targeted a file the model was not shown in full* | The model guessed at a file it never saw (often: the bug is more than 3 imports away, or the file is over 60 KB). Nothing was written. |
+| *The proposed fix did not change the file* | The model returned the file unchanged. Nothing was written. |
+| *rate-limited us before a fix could be generated* | Your LLM provider's rate limit. Try again shortly. |
 
 ## A patch made things worse
 

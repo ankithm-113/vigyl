@@ -75,7 +75,7 @@ cat <<'NEXT'
 Next:
 
   1. Create a Telegram bot — message @BotFather, send /newbot
-  2. Get an Anthropic API key — https://console.anthropic.com
+  2. Get an OpenAI API key — https://platform.openai.com/api-keys
   3. In the project you want to control:
 
        cd your-project

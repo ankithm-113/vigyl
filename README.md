@@ -11,7 +11,7 @@ you  ▸ run the build
 bot  ▸ 🧠 Working out what to run...
      ▸ ▶ Running (attempt 1/4): npm run build
      ▸ ✗ Failed (exit 1) — build_error: src/app.ts(12,5): error TS2304
-     ▸ 🔧 Asking Claude for a fix...
+     ▸ 🔧 Asking the model for a fix...
      ▸ ✍ Patched src/app.ts: added the missing import
      ▸ ▶ Running (attempt 2/4): npm run build
      ▸ ✅ Done — succeeded on attempt 2 after self-healing.
@@ -52,8 +52,10 @@ Requires **Node 20 or newer**. Works on Linux, macOS and Windows.
 **1. Make a Telegram bot.** Message [@BotFather](https://t.me/BotFather), send
 `/newbot`, follow the prompts, copy the token it gives you.
 
-**2. Get an Anthropic API key** from
-[console.anthropic.com](https://console.anthropic.com).
+**2. Get an OpenAI API key** from
+[platform.openai.com/api-keys](https://platform.openai.com/api-keys). Vigyl uses
+`gpt-4o-mini` by default; a typical command costs well under a cent.
+(Anthropic is also supported — see [Choosing a model](#choosing-a-model).)
 
 **3. Run the wizard** in the project you want to control:
 
@@ -77,7 +79,7 @@ Now message your bot.
 ### No terminal? (CI, containers, agents)
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
 export TELEGRAM_BOT_TOKEN=123456:ABC...
 vigyl init --non-interactive
 ```
@@ -107,7 +109,7 @@ Vigyl doctor
   ✓ Config file                Loaded and valid
   ✓ Workspace writable         /home/you/my-project
   ✓ Authorized chats           1 chat(s) authorized
-  ✓ Anthropic key              Key valid; Claude Haiku 4.5 is available.
+  ✓ OpenAI key                 Key valid; gpt-4o-mini is available.
   ✓ Telegram token             Connected to @your_bot.
   ✓ Command parsing            Parsed a test request into: tail -n 20 logs/app.log
 
@@ -130,7 +132,7 @@ Vigyl doctor
 ## How it works
 
 ```
-Telegram ──▶ bot.ts ──▶ daemon.ts ──▶ supervisor.ts ──▶ Claude Haiku
+Telegram ──▶ bot.ts ──▶ daemon.ts ──▶ supervisor.ts ──▶ llm.ts (OpenAI / Anthropic)
                           │                              (what should run?)
                           ├──▶ hitl.ts       approval gate
                           ├──▶ security.ts   path sandbox + command policy
@@ -140,13 +142,16 @@ Telegram ──▶ bot.ts ──▶ daemon.ts ──▶ supervisor.ts ──▶ 
                                      └──▶ supervisor.ts (propose a patch)
 ```
 
-1. Your message goes to Claude Haiku, which turns it into one shell command.
+1. Your message goes to the model (gpt-4o-mini by default), which turns it into
+   one shell command, returned as schema-validated structured output.
 2. The command is checked against the security policy and the approval rules.
 3. Anything destructive comes back to you with Approve / Deny buttons.
 4. Otherwise it runs in a real PTY, confined to your workspace.
 5. On failure, the output is classified and — when it is the kind of failure a
-   file edit can fix — Claude proposes a patch, which is validated against the
-   sandbox before it is written. Then the command runs again, up to 3 retries.
+   file edit can fix — the model is shown the failing file plus the local files
+   it imports (up to 3 hops) and proposes a patch. The patch may only target a
+   file it was shown in full, and is validated against the sandbox before it is
+   written. Then the command runs again, up to 3 retries.
 
 ## Safety
 
@@ -156,7 +161,7 @@ holds it in. The short version:
 - **Path sandbox.** Every path is canonicalised (symlinks resolved) and checked
   for containment inside your workspace. This is a real boundary.
 - **Approval gate.** Destructive actions need a button press. The rules are
-  yours, and they run independently of Claude's own judgement.
+  yours, and they run independently of the model's own judgement.
 - **Patches are validated before they are written.** A proposed fix that points
   outside the workspace is rejected and logged, and the original file is backed
   up before any overwrite.
@@ -176,7 +181,8 @@ full reference in **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 {
   "workspace_root": "/home/you/my-project",
   "telegram": { "bot_token": "…", "allowed_chat_ids": [12345678] },
-  "anthropic": { "api_key": "…", "model": "claude-haiku-4-5" },
+  "provider": "openai",
+  "openai": { "api_key": "…", "model": "gpt-4o-mini" },
   "hitl": {
     "require_for": ["production", "env", "delete", "migrate", "push"],
     "timeout_seconds": 300
@@ -189,19 +195,29 @@ full reference in **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 **This file holds two live credentials.** `vigyl init` writes it `0600` and adds
 it to `.gitignore`.
 
+### Choosing a model
+
+OpenAI is the default. To use Anthropic instead, set `ANTHROPIC_API_KEY` and
+leave `OPENAI_API_KEY` unset (Vigyl picks whichever key it finds, preferring
+OpenAI), or force it with `VIGYL_PROVIDER=anthropic`. `VIGYL_MODEL` overrides the
+model for whichever provider is active. Details in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md#choosing-a-provider).
+
 ## What is not proven yet
 
 Being straight with you, because this is v0.1.0 and it runs commands on your
 server:
 
-- **No end-to-end session has been run against a live Anthropic key.** Every
-  layer is unit- and integration-tested (360 tests, including tests that run
-  real commands and patch real files on disk), and the credential checks have
-  been verified against the live APIs. But the full
-  message → Claude → command → self-heal loop has not yet been driven by a real
-  key. Run `vigyl doctor` first; it exercises the same code path.
-- **The self-healing patch loop has never seen a real model's patch.** The loop
-  is tested against a stubbed Supervisor.
+- **Live testing so far is one developer's sandbox.** The full Telegram →
+  model → command → self-heal loop has been run end to end against
+  `gpt-4o-mini`: it healed a TypeScript error, a failing test and a bug two
+  imports deep, refused to patch a missing dependency, and held a production
+  deploy for approval. That is a handful of scenarios, not real-world mileage.
+- **Anthropic is supported but has never been run against a live key.** It
+  shares the provider interface and has unit tests; only OpenAI has been live.
+- **Self-heal edits one file per attempt**, and only files under 60 KB that it
+  was shown in full. Bugs that need coordinated edits across files will stop
+  after a few attempts rather than be fixed.
 - **pwsh and POSIX shell paths are written but lightly exercised.** Development
   was on Windows with cmd.exe.
 

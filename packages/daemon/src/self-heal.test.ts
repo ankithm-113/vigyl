@@ -381,6 +381,32 @@ describe('errorSignature', () => {
 
     assert.notEqual(a, b);
   });
+
+  it('sees progress when the message stays the same but the values move', () => {
+    // Live cart run: same assertion message, actual went 1100 -> 110.00000000000001.
+    const base = { type: 'test_failure' as const, exitCode: 1, signal: 'assert', message: 'total should be 110' };
+    const before = errorSignature({ ...base, rawLines: ['AssertionError: total should be 110', '  actual: 1100,', '  expected: 110,'] });
+    const after = errorSignature({
+      ...base,
+      rawLines: ['AssertionError: total should be 110', '  actual: 110.00000000000001,', '  expected: 110,'],
+    });
+
+    assert.notEqual(before, after);
+  });
+
+  it('ignores run-to-run noise in the output tail', () => {
+    const base = { type: 'test_failure' as const, exitCode: 1, signal: 'assert', message: 'x failed' };
+    const run1 = errorSignature({
+      ...base,
+      rawLines: ['x failed', 'ok 1 - parses (12.5ms)', 'pid 48213 exited', 'log: /x/_logs/2026-07-26T20_09_07_255Z-debug-0.log'],
+    });
+    const run2 = errorSignature({
+      ...base,
+      rawLines: ['x failed', 'ok 1 - parses (9.1ms)', 'pid 51877 exited', 'log: /x/_logs/2026-07-26T21_00_00_001Z-debug-0.log'],
+    });
+
+    assert.equal(run1, run2);
+  });
 });
 
 describe('when not to attempt a patch', () => {

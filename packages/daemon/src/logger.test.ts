@@ -27,6 +27,21 @@ describe('redactSecrets', () => {
     assert.match(String(out['message']), /npm run build/);
   });
 
+  it('scrubs a leaked OpenAI key out of free-form text', () => {
+    const out = redactSecrets({
+      message: 'OPENAI_API_KEY=sk-proj-AbC123dEf456GhI789jKl012MnO345pQr && npm test',
+      legacy: 'Bearer sk-AbC123dEf456GhI789jKl012MnO345',
+    }) as Record<string, string>;
+
+    assert.ok(!out['message']?.includes('AbC123'));
+    assert.ok(!out['legacy']?.includes('AbC123'));
+    assert.match(String(out['message']), /npm test/);
+  });
+
+  it('leaves short sk- words alone', () => {
+    assert.equal(redactSecrets('see sk-learn docs'), 'see sk-learn docs');
+  });
+
   it('scrubs a bot token out of free-form text', () => {
     const out = redactSecrets(
       'curl https://api.telegram.org/bot8123456789:AAHfitZxUvW1234567890abcdefghijklmno/getMe',

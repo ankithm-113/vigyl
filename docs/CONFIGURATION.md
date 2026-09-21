@@ -27,14 +27,24 @@ variables always beat `.env`.
     "allowed_chat_ids": [12345678]    // everyone else is refused
   },
 
+  // Which model vendor to use: "openai" (default) or "anthropic". Only the
+  // matching block below is required.
+  "provider": "openai",
+
+  "openai": {
+    "api_key": "sk-...",
+    "model": "gpt-4o-mini"            // chosen for latency and cost
+  },
+
+  // Optional unless provider is "anthropic".
   "anthropic": {
     "api_key": "sk-ant-...",
-    "model": "claude-haiku-4-5"       // Haiku is chosen for latency and cost
+    "model": "claude-haiku-4-5"
   },
 
   "hitl": {
     // Approval is required if a command contains any of these, regardless of
-    // what Claude thinks. Case-insensitive substring match.
+    // what the model thinks. Case-insensitive substring match.
     "require_for": ["production", "env", "delete", "migrate", "push"],
     "timeout_seconds": 300            // how long an approval stays valid
   },
@@ -69,11 +79,13 @@ daemon with no token.
 
 | Variable | Overrides |
 |---|---|
+| `OPENAI_API_KEY` | `openai.api_key` |
 | `ANTHROPIC_API_KEY` | `anthropic.api_key` |
+| `VIGYL_PROVIDER` | `provider` (`openai` or `anthropic`) |
 | `TELEGRAM_BOT_TOKEN` | `telegram.bot_token` |
 | `VIGYL_ALLOWED_CHAT_IDS` | `telegram.allowed_chat_ids` (comma-separated) |
 | `VIGYL_WORKSPACE` | `workspace_root` |
-| `VIGYL_MODEL` | `anthropic.model` |
+| `VIGYL_MODEL` | the active provider's `model` |
 | `VIGYL_LOG_LEVEL` | `daemon.log_level` |
 | `VIGYL_HITL_TIMEOUT_SECONDS` | `hitl.timeout_seconds` |
 | `VIGYL_CONFIG` | path to the config file itself |
@@ -114,3 +126,17 @@ inside the workspace.
 
 `.vigyl/` and `vigyl.config.json` are both added to `.gitignore` by
 `vigyl init`.
+
+## Choosing a provider
+
+If `provider` is not set, Vigyl picks one in this order:
+
+1. `VIGYL_PROVIDER`, if set
+2. `provider` in `vigyl.config.json`, if set
+3. `openai`, if an OpenAI key is present (env or file)
+4. `anthropic`, if only an Anthropic key is present
+5. otherwise `openai`, and startup fails asking for `OPENAI_API_KEY`
+
+Default models: `gpt-4o-mini` for OpenAI, `claude-haiku-4-5` for Anthropic.
+Both providers use schema-enforced structured output, so the model's reply
+always parses. `vigyl doctor` checks the key for whichever provider is active.

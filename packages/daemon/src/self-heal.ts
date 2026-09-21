@@ -129,24 +129,35 @@ export type ProgressReporter = (message: string) => void;
 /**
  * Stable identity for a failure, used to notice a patch that changed nothing.
  *
- * Volatile fragments are normalised out first. npm ends every failure with the
- * path to a fresh debug log:
+ * Built from the headline message AND the tail of the output. The message
+ * alone was not enough: an assertion keeps its message ("total should be
+ * 110") while its actual value moves (1100 -> 110.00000000000001), so a patch
+ * that made real progress looked like no progress and the loop quit. The
+ * detail lines that carry "actual"/"expected" values now count too.
  *
- *   npm error A complete log of this run can be found in:
- *   .../_logs/2026-07-26T20_09_07_255Z-debug-0.log
- *
- * The timestamp differs on every run, so a raw string comparison never matches
- * and the loop happily burns all three retries — and three LLM calls — on an
- * error that has not changed at all. Long digit runs go too (pids, epoch ms),
- * while short ones survive so a TS error code and a line number still
- * distinguish two genuinely different failures.
+ * Volatile fragments are normalised out first, or every run would look new
+ * and the loop would burn all its retries on one unchanged error. npm ends
+ * every failure with a path to a fresh, timestamped debug log; test runners
+ * print durations; stacks carry pids and epoch millis. Short numbers survive,
+ * so a TS error code, a line number or an assertion value still count.
  */
 export function errorSignature(context: ErrorContext): string {
-  const normalized = context.message
-    .replace(/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9TZ_:.-]+/g, '<timestamp>')
-    .replace(/[0-9]{5,}/g, '<number>');
-  return `${context.type}::${normalized}`;
+  const normalise = (text: string): string =>
+    text
+      .replace(/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9TZ_:.-]+/g, '<timestamp>')
+      .replace(/[0-9]+(?:[.][0-9]+)? ?(?:ms|s)[)]?$/g, '<duration>')
+      .replace(/[0-9]{5,}/g, '<number>')
+      .trim();
+  const detail = context.rawLines
+    .slice(-SIGNATURE_TAIL_LINES)
+    .map(normalise)
+    .filter((line) => line !== '' && !line.includes('<timestamp>'))
+    .join('|');
+  return `${context.type}::${normalise(context.message)}::${detail}`;
 }
+
+/** Output lines, from the end, that contribute to a failure's identity. */
+const SIGNATURE_TAIL_LINES = 30;
 
 export class SelfHealingLoop {
   private readonly executor: Executor;

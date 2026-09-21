@@ -45,7 +45,7 @@ Additionally:
 
 A command needs a human if **either**:
 
-- Claude sets `requiresApproval` or `isDestructive`, **or**
+- the model sets `requiresApproval` or `isDestructive`, **or**
 - the command text matches one of *your* `hitl.require_for` keywords.
 
 Two independent votes, deliberately. The model is being steered by the very
@@ -110,12 +110,12 @@ and rely on the sandbox and the gate for what it *can* do.
 
 ## Credentials
 
-`vigyl.config.json` holds a live Anthropic key and a Telegram bot token. It is
+`vigyl.config.json` holds a live LLM API key (OpenAI or Anthropic) and a Telegram bot token. It is
 written `0600` and added to `.gitignore` by `vigyl init`.
 
 **Logs are redacted.** Every record passes through a redaction pass before it
 reaches stdout or `daemon.log`: credential-shaped keys are replaced, and
-`sk-ant-` and bot-token patterns are scrubbed out of free text — including from
+OpenAI (`sk-`, `sk-proj-`), Anthropic (`sk-ant-`) and bot-token patterns are scrubbed out of free text — including from
 Telegram API URLs, which embed the token in the path. `daemon.log` is the file
 people paste into GitHub issues, so this matters.
 

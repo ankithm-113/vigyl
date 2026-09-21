@@ -38,6 +38,9 @@ const SECRET_KEY_PATTERN = /(api[_-]?key|token|secret|password|passwd|authorizat
  */
 const SECRET_VALUE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/sk-ant-[A-Za-z0-9_-]{8,}/g, 'sk-ant-[REDACTED]'],
+  // OpenAI: sk-proj-, sk-svcacct-, sk-admin-, or legacy bare sk-. After the
+  // Anthropic rule, whose replacement is too short to match this one.
+  [/sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}/g, 'sk-[REDACTED]'],
   [/\d{6,12}:[A-Za-z0-9_-]{30,}/g, '[REDACTED-BOT-TOKEN]'],
 ];
 
