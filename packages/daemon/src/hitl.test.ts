@@ -41,7 +41,7 @@ describe('approvalReasons', () => {
 
   it('reports the model flag', () => {
     const reasons = approvalReasons(command({ requiresApproval: true }), triggers, security);
-    assert.ok(reasons.some((r) => r.includes('Claude flagged')));
+    assert.ok(reasons.some((r) => r.includes('model flagged')));
   });
 
   it('reports a destructive action separately from the approval flag', () => {

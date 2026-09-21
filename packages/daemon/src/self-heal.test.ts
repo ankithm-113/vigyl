@@ -564,3 +564,52 @@ describe('patches that change nothing', () => {
     assert.equal(fs.existsSync(path.join(workspace, '.vigyl', 'backups')), false);
   });
 });
+
+describe('transitive imports', () => {
+  it('follows imports more than one hop to reach the bug', async () => {
+    // The live cart scenario: test -> cart -> tax, bug in tax.
+    fs.writeFileSync(path.join(workspace, 'src', 'app.ts'), "import { total } from './cart';" + NL + 'const broken = foo;');
+    fs.writeFileSync(path.join(workspace, 'src', 'cart.ts'), "import { applyTax } from './tax';" + NL + 'export const total = 1;');
+    fs.writeFileSync(path.join(workspace, 'src', 'tax.ts'), 'export const TAX_RATE = 10;');
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    executor.enqueue(0, 'ok');
+    const supervisor = new FakeSupervisor([
+      { filePath: 'src/tax.ts', contents: 'export const TAX_RATE = 0.1;', explanation: 'Rate is a fraction.' },
+    ]);
+
+    const result = await makeLoop(executor, supervisor).runWithHealing('npm test', noop);
+
+    assert.match(supervisor.lastCodeContext, /File: src[/]tax[.]ts [(]imported by src[/]cart[.]ts[)]/);
+    assert.equal(result.success, true);
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'tax.ts'), 'utf-8'), 'export const TAX_RATE = 0.1;');
+  });
+
+  it('survives an import cycle', async () => {
+    fs.writeFileSync(path.join(workspace, 'src', 'app.ts'), "import './b';" + NL + 'const broken = foo;');
+    fs.writeFileSync(path.join(workspace, 'src', 'b.ts'), "import './app';");
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([undefined]);
+
+    await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.equal(supervisor.lastCodeContext.split('File: ').length - 1, 2);
+  });
+
+  it('stops after the depth limit', async () => {
+    // app -> d1 -> d2 -> d3 -> d4: d4 is four hops away and must not appear.
+    fs.writeFileSync(path.join(workspace, 'src', 'app.ts'), "import './d1';" + NL + 'const broken = foo;');
+    for (let i = 1; i <= 4; i++) {
+      fs.writeFileSync(path.join(workspace, 'src', `d${i}.ts`), `import './d${i + 1}'; // DEPTH-${i}`);
+    }
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([undefined]);
+
+    await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.match(supervisor.lastCodeContext, /DEPTH-3/);
+    assert.ok(!supervisor.lastCodeContext.includes('DEPTH-4'));
+  });
+});

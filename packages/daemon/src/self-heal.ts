@@ -39,6 +39,12 @@ const MAX_CODE_CONTEXT_BYTES = 200_000;
 const MAX_FILE_BYTES = 60_000;
 /** How many locally imported files to show alongside the error location. */
 const MAX_RELATED_FILES = 5;
+/**
+ * How many import hops to follow from the error location. A failing test
+ * usually sits two hops from the bug (test -> module -> helper); the live
+ * cart scenario had the bug at exactly that depth.
+ */
+const MAX_IMPORT_DEPTH = 3;
 
 // Built from char codes: backslash escapes do not survive saving in this repo.
 const NL = String.fromCharCode(10);
@@ -345,16 +351,24 @@ export class SelfHealingLoop {
       `File: ${this.display(primary.resolved)} (where the error was detected${where})` + NL + primary.contents,
     ];
 
-    for (const related of this.localImports(primary.resolved, primary.contents)) {
-      if (shown.size > MAX_RELATED_FILES) break;
-      if (shown.has(related)) continue;
-      const file = this.readForContext(related, 'imported file');
-      if (typeof file === 'string' || file.contents.length > budget) continue;
-      budget -= file.contents.length;
-      shown.add(file.resolved);
-      sections.push(
-        `File: ${this.display(file.resolved)} (imported by ${this.display(primary.resolved)})` + NL + file.contents,
-      );
+    // Breadth-first, so nearer imports win the file and byte budgets.
+    const queue: Array<{ resolved: string; contents: string; depth: number }> = [
+      { resolved: primary.resolved, contents: primary.contents, depth: 0 },
+    ];
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+      if (next.depth >= MAX_IMPORT_DEPTH) continue;
+      for (const related of this.localImports(next.resolved, next.contents)) {
+        if (shown.size > MAX_RELATED_FILES) break;
+        if (shown.has(related)) continue;
+        const file = this.readForContext(related, 'imported file');
+        if (typeof file === 'string' || file.contents.length > budget) continue;
+        budget -= file.contents.length;
+        shown.add(file.resolved);
+        sections.push(
+          `File: ${this.display(file.resolved)} (imported by ${this.display(next.resolved)})` + NL + file.contents,
+        );
+        queue.push({ ...file, depth: next.depth + 1 });
+      }
     }
 
     return { text: sections.join(NL + NL), shown };

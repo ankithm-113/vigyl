@@ -56,7 +56,7 @@ export function approvalReasons(
 ): string[] {
   const reasons: string[] = [];
 
-  if (parsed.requiresApproval) reasons.push('Claude flagged this as needing approval');
+  if (parsed.requiresApproval) reasons.push('the model flagged this as needing approval');
   if (parsed.isDestructive) reasons.push('the action is destructive');
 
   // Independent of the model's own judgement: it can be talked out of setting
