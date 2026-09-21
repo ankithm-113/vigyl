@@ -60,6 +60,12 @@ const LOCAL_IMPORT = new RegExp(
     's*|import' + BS + 's+)([' + "'" + '"])([.]{1,2}/[^' + "'" + '"]+)' + BS + '1',
   'g',
 );
+const TS_SOURCE_FOR: ReadonlyArray<readonly [string, string]> = [
+  ['.js', '.ts'],
+  ['.js', '.tsx'],
+  ['.mjs', '.mts'],
+  ['.cjs', '.cts'],
+];
 const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '/index.ts', '/index.js'];
 
 /**
@@ -426,7 +432,13 @@ export class SelfHealingLoop {
       const specifier = match[2];
       if (specifier === undefined) continue;
       const base = path.resolve(path.dirname(fromFile), specifier);
-      const hit = RESOLVE_SUFFIXES.map((suffix) => base + suffix).find((candidate) => {
+      // TypeScript ESM imports name the compiled file ('./x.js') while the
+      // source on disk is x.ts, so also try the source extension.
+      const candidates = RESOLVE_SUFFIXES.map((suffix) => base + suffix);
+      for (const [js, ts] of TS_SOURCE_FOR) {
+        if (base.endsWith(js)) candidates.push(base.slice(0, -js.length) + ts);
+      }
+      const hit = candidates.find((candidate) => {
         try {
           return fs.statSync(candidate).isFile();
         } catch {
@@ -501,8 +513,9 @@ export class SelfHealingLoop {
         return 'unseen';
       }
 
+      const original = fs.readFileSync(resolved, 'utf-8');
       const normalise = (text: string): string => text.split(CR).join('').trimEnd();
-      if (normalise(fs.readFileSync(resolved, 'utf-8')) === normalise(patch.contents)) {
+      if (normalise(original) === normalise(patch.contents)) {
         logger.warn('Patch changes nothing; not writing it', { proposedPath: patch.filePath, attempt });
         return 'unchanged';
       }
@@ -512,7 +525,7 @@ export class SelfHealingLoop {
       // Write to a sibling temp file and rename, so a crash mid-write cannot
       // leave the real file truncated.
       const tempPath = `${resolved}.vigyl-tmp`;
-      fs.writeFileSync(tempPath, patch.contents, 'utf-8');
+      fs.writeFileSync(tempPath, keepFinalNewline(original, patch.contents), 'utf-8');
       fs.renameSync(tempPath, resolved);
 
       logger.info('Patch applied', {
@@ -549,6 +562,17 @@ export class SelfHealingLoop {
     fs.copyFileSync(resolved, backupPath);
     return backupPath;
   }
+}
+
+/**
+ * Models routinely drop a file's trailing newline. Harmless to a compiler, but
+ * it shows up as a stray change in the user's git diff (seen on ts-extras), so
+ * the original file's final newline wins.
+ */
+export function keepFinalNewline(original: string, patched: string): string {
+  const ending = original.endsWith(CR + NL) ? CR + NL : original.endsWith(NL) ? NL : '';
+  if (ending === '' || patched.endsWith(NL)) return patched;
+  return patched + ending;
 }
 
 function truncate(text: string, limit: number): string {

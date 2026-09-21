@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { HARD_MAX_RETRIES, SelfHealingLoop, errorSignature } from './self-heal';
+import { HARD_MAX_RETRIES, SelfHealingLoop, errorSignature, keepFinalNewline } from './self-heal';
 import type { Executor, ExecutionResult } from './executor';
 import type { Supervisor, UnvalidatedPatch } from './supervisor';
 import type { VigylConfig } from './config';
@@ -611,6 +611,19 @@ describe('transitive imports', () => {
     assert.equal(fs.readFileSync(path.join(workspace, 'src', 'tax.ts'), 'utf-8'), 'export const TAX_RATE = 0.1;');
   });
 
+  it("resolves TypeScript ESM '.js' specifiers to the .ts source", async () => {
+    // Found on ts-extras: import {x} from './array-first.js' where only array-first.ts exists.
+    fs.writeFileSync(path.join(workspace, 'src', 'app.ts'), "export {x} from './helper.js';" + NL + 'const broken = foo;');
+    fs.writeFileSync(path.join(workspace, 'src', 'helper.ts'), 'export const x = 1; // HELPER-SOURCE');
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([undefined]);
+
+    await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.match(supervisor.lastCodeContext, /HELPER-SOURCE/);
+  });
+
   it('survives an import cycle', async () => {
     fs.writeFileSync(path.join(workspace, 'src', 'app.ts'), "import './b';" + NL + 'const broken = foo;');
     fs.writeFileSync(path.join(workspace, 'src', 'b.ts'), "import './app';");
@@ -637,5 +650,22 @@ describe('transitive imports', () => {
 
     assert.match(supervisor.lastCodeContext, /DEPTH-3/);
     assert.ok(!supervisor.lastCodeContext.includes('DEPTH-4'));
+  });
+});
+
+describe('keepFinalNewline', () => {
+  const CRLF = String.fromCharCode(13) + NL;
+
+  it('restores a trailing newline the model dropped', () => {
+    assert.equal(keepFinalNewline('a' + NL, 'b'), 'b' + NL);
+  });
+
+  it('keeps CRLF endings CRLF', () => {
+    assert.equal(keepFinalNewline('a' + CRLF, 'b'), 'b' + CRLF);
+  });
+
+  it('does not add one the original never had, or double one already there', () => {
+    assert.equal(keepFinalNewline('a', 'b'), 'b');
+    assert.equal(keepFinalNewline('a' + NL, 'b' + NL), 'b' + NL);
   });
 });
