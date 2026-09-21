@@ -177,6 +177,12 @@ RULES
   containing "..", never inside node_modules or a package manager's cache.
 - contents MUST be the complete corrected file, not a diff and not a fragment.
   Whatever you return replaces the file wholesale.
+- You may be shown several files. The first is where the error was DETECTED,
+  which is often not where the bug is: when a test assertion fails, the bug is
+  usually in the code under test, not in the test. Do not edit a test to make
+  it pass unless the test itself is plainly wrong.
+- filePath MUST be exactly one of the "File:" paths you were shown. Never
+  patch a file you were not shown.
 - Change as little as possible. Fix the reported error and nothing else. Do not
   reformat, do not rename, do not add features or error handling.
 - Set canFix to false when the error is not fixable by editing one file: a

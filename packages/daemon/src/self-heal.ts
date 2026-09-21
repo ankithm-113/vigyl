@@ -35,8 +35,39 @@ export const HARD_MAX_RETRIES = 3;
 
 /** Never read more than this into an LLM prompt as "the relevant source". */
 const MAX_CODE_CONTEXT_BYTES = 200_000;
-/** Lines either side of the reported error line. */
-const CODE_CONTEXT_RADIUS = 40;
+/** A single file larger than this is not shown, and so cannot be patched. */
+const MAX_FILE_BYTES = 60_000;
+/** How many locally imported files to show alongside the error location. */
+const MAX_RELATED_FILES = 5;
+
+// Built from char codes: backslash escapes do not survive saving in this repo.
+const NL = String.fromCharCode(10);
+const CR = String.fromCharCode(13);
+const BS = String.fromCharCode(92);
+
+/**
+ * Relative module specifiers in require(), import ... from, and import().
+ * Only ./ and ../ paths: packages live in node_modules and are never patched.
+ */
+const LOCAL_IMPORT = new RegExp(
+  '(?:require' + BS + '(' + BS + 's*|from' + BS + 's+|import' + BS + 's*' + BS + '(' + BS +
+    's*|import' + BS + 's+)([' + "'" + '"])([.]{1,2}/[^' + "'" + '"]+)' + BS + '1',
+  'g',
+);
+const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '/index.ts', '/index.js'];
+
+/**
+ * The source handed to the model, plus the exact set of files it was shown.
+ *
+ * Patches replace a file wholesale, so the model may only patch a file it saw
+ * in full. Handing it a 40-line excerpt and accepting "the complete file" back
+ * would silently delete every line it never saw.
+ */
+export interface CodeContext {
+  text: string;
+  /** Canonical paths of every file included in full. */
+  shown: ReadonlySet<string>;
+}
 
 /**
  * Failure kinds a single-file edit cannot fix.
@@ -211,7 +242,8 @@ export class SelfHealingLoop {
 
       onProgress('🔧 Asking the model for a fix...');
 
-      const proposal = await this.requestPatch(context);
+      const code = this.gatherCodeContext(context);
+      const proposal = await this.requestPatch(context, code);
       if (proposal === 'rate_limited') {
         onProgress('⚠ LLM rate limit reached. Stopping so you can retry shortly.');
         return this.failure(attempt, lastExitCode, 'rate_limited', context, patches, lastOutput);
@@ -221,10 +253,18 @@ export class SelfHealingLoop {
         return this.failure(attempt, lastExitCode, 'no_patch_offered', context, patches, lastOutput);
       }
 
-      const applied = this.applyPatch(proposal, attempt);
+      const applied = this.applyPatch(proposal, attempt, code.shown);
       if (applied === 'rejected') {
         onProgress('⛔ Patch rejected: it targeted a file outside the workspace.');
         return this.failure(attempt, lastExitCode, 'patch_rejected', context, patches, lastOutput);
+      }
+      if (applied === 'unseen') {
+        onProgress('⛔ Patch rejected: it targeted a file the model was not shown in full.');
+        return this.failure(attempt, lastExitCode, 'patch_rejected', context, patches, lastOutput);
+      }
+      if (applied === 'unchanged') {
+        onProgress('⚠ The proposed fix did not change the file. Stopping.');
+        return this.failure(attempt, lastExitCode, 'no_patch_offered', context, patches, lastOutput);
       }
       if (applied === 'failed') {
         onProgress('✗ Could not write the patch. Stopping.');
@@ -261,12 +301,12 @@ export class SelfHealingLoop {
   /** Ask the Supervisor for a patch, with the relevant source attached. */
   private async requestPatch(
     context: ErrorContext,
+    code: CodeContext,
   ): Promise<UnvalidatedPatch | undefined | 'rate_limited'> {
     const errorText = context.rawLines.slice(-this.config.self_heal.context_lines).join('\n');
-    const codeContext = this.gatherCodeContext(context);
 
     try {
-      return await this.supervisor.generatePatch(errorText, codeContext, this.config.workspace_root);
+      return await this.supervisor.generatePatch(errorText, code.text, this.config.workspace_root);
     } catch (err) {
       logger.warn('Patch generation failed', {
         reason: err instanceof Error ? err.message : String(err),
@@ -280,59 +320,102 @@ export class SelfHealingLoop {
   }
 
   /**
-   * Read the source the error points at.
+   * Read the source the error points at, plus the local files it imports.
    *
-   * Goes through validatePath like everything else: the file path here comes
-   * from parsing command output, which is not trustworthy input either. The
-   * build guide compared with `filePath.startsWith(workspaceRoot)`, the same
-   * prefix bug as its sandbox, so a path could be read from outside the
-   * workspace and then handed to the model.
+   * The error location is where a failure was DETECTED, which is often not
+   * where the bug is: a failing assertion throws in the test file, while the
+   * bug lives in the module under test. Showing only the throwing file left
+   * the model nothing to fix but the test itself (seen in the first live run).
+   *
+   * Every path goes through validatePath like everything else: the file path
+   * comes from parsing command output, and an import specifier is file
+   * content, so neither is a trustworthy path.
    */
-  private gatherCodeContext(context: ErrorContext): string {
-    if (context.file === undefined) return 'No file context available.';
+  private gatherCodeContext(context: ErrorContext): CodeContext {
+    const shown = new Set<string>();
+    if (context.file === undefined) return { text: 'No file context available.', shown };
 
+    const primary = this.readForContext(context.file, 'error location');
+    if (typeof primary === 'string') return { text: primary, shown };
+
+    shown.add(primary.resolved);
+    let budget = MAX_CODE_CONTEXT_BYTES - primary.contents.length;
+    const where = context.line === undefined ? '' : `, error reported on line ${context.line}`;
+    const sections = [
+      `File: ${this.display(primary.resolved)} (where the error was detected${where})` + NL + primary.contents,
+    ];
+
+    for (const related of this.localImports(primary.resolved, primary.contents)) {
+      if (shown.size > MAX_RELATED_FILES) break;
+      if (shown.has(related)) continue;
+      const file = this.readForContext(related, 'imported file');
+      if (typeof file === 'string' || file.contents.length > budget) continue;
+      budget -= file.contents.length;
+      shown.add(file.resolved);
+      sections.push(
+        `File: ${this.display(file.resolved)} (imported by ${this.display(primary.resolved)})` + NL + file.contents,
+      );
+    }
+
+    return { text: sections.join(NL + NL), shown };
+  }
+
+  /** Validate and read one whole file, or explain why not. */
+  private readForContext(
+    filePath: string,
+    label: string,
+  ): { resolved: string; contents: string } | string {
     let resolved: string;
     try {
-      resolved = this.security.validatePath(context.file, {
-        mustExist: true,
-        label: 'error location',
-      });
+      resolved = this.security.validatePath(filePath, { mustExist: true, label });
     } catch (err) {
-      logger.warn('Refusing to read error location outside the workspace', {
-        file: context.file,
+      logger.warn('Refusing to read a file outside the workspace', {
+        file: filePath,
+        label,
         reason: err instanceof Error ? err.message : String(err),
       });
       return 'No file context available (the reported path is outside the workspace).';
     }
 
-    let contents: string;
     try {
       const stat = fs.statSync(resolved);
       if (!stat.isFile()) return 'No file context available (not a regular file).';
-      if (stat.size > MAX_CODE_CONTEXT_BYTES) {
-        return `File ${context.file} is too large to include (${stat.size} bytes).`;
+      if (stat.size > MAX_FILE_BYTES) {
+        // Too big to show in full, so too big to patch safely.
+        return `File ${filePath} is too large to include (${stat.size} bytes).`;
       }
-      contents = fs.readFileSync(resolved, 'utf-8');
+      return { resolved, contents: fs.readFileSync(resolved, 'utf-8') };
     } catch (err) {
-      logger.debug('Could not read error location', {
+      logger.debug('Could not read file for context', {
         resolved,
         reason: err instanceof Error ? err.message : String(err),
       });
       return 'No file context available (unreadable).';
     }
+  }
 
-    const lines = contents.split('\n');
-    if (context.line === undefined) {
-      return `File: ${context.file}\n${contents}`;
+  /** Absolute paths of local modules imported by `contents`, in source order. */
+  private localImports(fromFile: string, contents: string): string[] {
+    const found: string[] = [];
+    for (const match of contents.matchAll(LOCAL_IMPORT)) {
+      const specifier = match[2];
+      if (specifier === undefined) continue;
+      const base = path.resolve(path.dirname(fromFile), specifier);
+      const hit = RESOLVE_SUFFIXES.map((suffix) => base + suffix).find((candidate) => {
+        try {
+          return fs.statSync(candidate).isFile();
+        } catch {
+          return false;
+        }
+      });
+      if (hit !== undefined && !found.includes(hit)) found.push(hit);
     }
+    return found;
+  }
 
-    const start = Math.max(0, context.line - 1 - CODE_CONTEXT_RADIUS);
-    const end = Math.min(lines.length, context.line + CODE_CONTEXT_RADIUS);
-    const excerpt = lines.slice(start, end).join('\n');
-    return (
-      `File: ${context.file} (showing lines ${start + 1}-${end} of ${lines.length}; ` +
-      `the error is on line ${context.line})\n${excerpt}`
-    );
+  /** Workspace-relative with forward slashes: what the model echoes back as filePath. */
+  private display(resolved: string): string {
+    return path.relative(this.security.workspaceRoot, resolved).split(path.sep).join('/');
   }
 
   /**
@@ -343,7 +426,11 @@ export class SelfHealingLoop {
    * is logged at warn level with the attempted path, because it is either a
    * confused model or an injection attempt and both are worth seeing.
    */
-  private applyPatch(patch: UnvalidatedPatch, attempt: number): AppliedPatch | 'rejected' | 'failed' {
+  private applyPatch(
+    patch: UnvalidatedPatch,
+    attempt: number,
+    shown: ReadonlySet<string>,
+  ): AppliedPatch | 'rejected' | 'unseen' | 'unchanged' | 'failed' {
     let resolved: string;
     try {
       // mustExist: a self-healing edit repairs a file that is already there.
@@ -377,6 +464,22 @@ export class SelfHealingLoop {
       if (!fs.statSync(resolved).isFile()) {
         logger.warn('PATCH REJECTED — target is not a regular file', { resolved });
         return 'rejected';
+      }
+
+      // A wholesale replacement of a file the model saw only in part, or not
+      // at all, would delete whatever it did not see.
+      if (!shown.has(resolved)) {
+        logger.warn('PATCH REJECTED — target was not shown to the model in full', {
+          proposedPath: patch.filePath,
+          attempt,
+        });
+        return 'unseen';
+      }
+
+      const normalise = (text: string): string => text.split(CR).join('').trimEnd();
+      if (normalise(fs.readFileSync(resolved, 'utf-8')) === normalise(patch.contents)) {
+        logger.warn('Patch changes nothing; not writing it', { proposedPath: patch.filePath, attempt });
+        return 'unchanged';
       }
 
       const backupPath = this.backUp(resolved);

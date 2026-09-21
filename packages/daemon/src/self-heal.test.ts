@@ -303,9 +303,10 @@ describe('retry limits', () => {
       executor.enqueue(1, `src/app.ts(${i + 1},1): error TS2304: name f${i}.` + NL);
     }
     const supervisor = new FakeSupervisor(
-      Array.from({ length: 50 }, () => ({
+      // Distinct contents: an identical patch is now stopped as a no-op.
+      Array.from({ length: 50 }, (_, i) => ({
         filePath: 'src/app.ts',
-        contents: 'x',
+        contents: `x${i}`,
         explanation: 'try',
       })),
     );
@@ -442,5 +443,124 @@ describe('when not to attempt a patch', () => {
 
     assert.equal(result.stoppedBecause, 'no_patch_offered');
     assert.equal(result.success, false);
+  });
+});
+
+describe('code context beyond the error location', () => {
+  function writeSrc(name: string, contents: string): void {
+    fs.writeFileSync(path.join(workspace, 'src', name), contents);
+  }
+
+  it('includes local files the failing file imports, and lets the model patch them', async () => {
+    // The live-run failure: the error is detected in one file, the bug is in
+    // a module it imports. The model must see (and may fix) the import.
+    writeSrc('app.ts', "import { sum } from './sum';" + NL + 'const broken = foo;');
+    writeSrc('sum.ts', 'export const sum = (a: number, b: number) => a - b;');
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    executor.enqueue(0, 'ok');
+    const supervisor = new FakeSupervisor([
+      {
+        filePath: 'src/sum.ts',
+        contents: 'export const sum = (a: number, b: number) => a + b;',
+        explanation: 'Add instead of subtract.',
+      },
+    ]);
+
+    const result = await makeLoop(executor, supervisor).runWithHealing('npm test', noop);
+
+    assert.match(supervisor.lastCodeContext, /File: src[/]app[.]ts [(]where the error was detected/);
+    assert.match(supervisor.lastCodeContext, /File: src[/]sum[.]ts [(]imported by src[/]app[.]ts[)]/);
+    assert.match(supervisor.lastCodeContext, /a - b/);
+    assert.equal(result.success, true);
+    assert.match(fs.readFileSync(path.join(workspace, 'src', 'sum.ts'), 'utf-8'), /a [+] b/);
+  });
+
+  it('never pulls in package imports', async () => {
+    writeSrc('app.ts', "import express from 'express';" + NL + 'const broken = foo;');
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([undefined]);
+
+    await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.equal(supervisor.lastCodeContext.split('File: ').length - 1, 1);
+  });
+
+  it('does not follow an import that escapes the workspace', async () => {
+    writeSrc('app.ts', "import k from '../../outside/authorized_keys';" + NL + 'const broken = foo;');
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([undefined]);
+
+    await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.ok(!supervisor.lastCodeContext.includes('ORIGINAL-KEYS'));
+  });
+
+  it('shows whole files, not an excerpt around the error line', async () => {
+    const long = Array.from({ length: 200 }, (_, i) => `const line${i} = ${i};`).join(NL);
+    writeSrc('app.ts', long);
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([undefined]);
+
+    await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.match(supervisor.lastCodeContext, /const line0 = 0;/);
+    assert.match(supervisor.lastCodeContext, /const line199 = 199;/);
+  });
+});
+
+describe('patch targets the model did not see', () => {
+  it('rejects a patch to a workspace file that was not shown in full', async () => {
+    // Inside the sandbox, so validatePath allows it, but the model never saw
+    // it: a wholesale replacement would destroy whatever it contains.
+    fs.writeFileSync(path.join(workspace, 'src', 'other.ts'), 'KEEP ME');
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([
+      { filePath: 'src/other.ts', contents: 'overwritten', explanation: 'guess' },
+    ]);
+
+    const result = await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.equal(result.success, false);
+    assert.equal(result.stoppedBecause, 'patch_rejected');
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'other.ts'), 'utf-8'), 'KEEP ME');
+    assert.equal(executor.commands.length, 1);
+  });
+
+  it('refuses to patch a file too large to show in full', async () => {
+    const big = 'x'.repeat(70_000);
+    fs.writeFileSync(path.join(workspace, 'src', 'app.ts'), big);
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([
+      { filePath: 'src/app.ts', contents: 'tiny', explanation: 'rewrite' },
+    ]);
+
+    const result = await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.match(supervisor.lastCodeContext, /too large/);
+    assert.equal(result.stoppedBecause, 'patch_rejected');
+    assert.equal(fs.readFileSync(path.join(workspace, 'src', 'app.ts'), 'utf-8'), big);
+  });
+});
+
+describe('patches that change nothing', () => {
+  it('stops without writing, backing up, or re-running', async () => {
+    const executor = new FakeExecutor();
+    executor.enqueue(1, BUILD_FAILURE);
+    const supervisor = new FakeSupervisor([
+      { filePath: 'src/app.ts', contents: 'const broken = foo;' + NL, explanation: 'no-op' },
+    ]);
+
+    const result = await makeLoop(executor, supervisor).runWithHealing('npm run build', noop);
+
+    assert.equal(result.stoppedBecause, 'no_patch_offered');
+    assert.deepEqual(result.patches, []);
+    assert.equal(executor.commands.length, 1);
+    assert.equal(fs.existsSync(path.join(workspace, '.vigyl', 'backups')), false);
   });
 });
