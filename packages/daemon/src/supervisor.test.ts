@@ -15,12 +15,15 @@ import {
   toUnvalidatedPatch,
   type PatchProposal,
 } from './supervisor';
+import type { LlmSettings } from './config';
 
 const BS = String.fromCharCode(92);
 
-const CONFIG = {
-  anthropic: { api_key: 'sk-ant-test-key', model: 'claude-haiku-4-5' },
-} as const;
+const CONFIG: LlmSettings = {
+  provider: 'anthropic',
+  api_key: 'sk-ant-test-key',
+  model: 'claude-haiku-4-5',
+};
 
 /** Minimal stand-in for the parts of the SDK the Supervisor touches. */
 function stubClient(handler: () => unknown): Anthropic {

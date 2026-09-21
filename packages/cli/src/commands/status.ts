@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { ConfigError, loadConfig } from '@vigyl/daemon';
+import { ConfigError, loadConfig, resolveLlm } from '@vigyl/daemon';
 import { logFilePath, removePidFile, serviceState } from '../service';
 
 function humanUptime(sinceMs: number): string {
@@ -36,7 +36,7 @@ export function status(cwd: string = process.cwd()): number {
 
   try {
     const config = loadConfig();
-    console.log(chalk.gray(`  Model:     ${config.anthropic.model}`));
+    console.log(chalk.gray(`  Model:     ${resolveLlm(config).model} (${config.provider})`));
     console.log(chalk.gray(`  Chats:     ${config.telegram.allowed_chat_ids.length} authorized`));
   } catch (err) {
     if (err instanceof ConfigError) {

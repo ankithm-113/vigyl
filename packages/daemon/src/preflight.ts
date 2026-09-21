@@ -11,6 +11,8 @@
  * Nothing here throws. Each check returns a result the caller can render.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+import type { LlmSettings } from './config';
 import { logger } from './logger';
 import { Supervisor } from './supervisor';
 
@@ -64,20 +66,64 @@ export async function checkAnthropicKey(apiKey: string, model: string): Promise<
 }
 
 /**
+ * Verify an OpenAI key and that the account can reach the model.
+ *
+ * models.retrieve, for the same reasons as the Anthropic check: free, fast,
+ * and it tells "bad key" apart from "wrong model id for this account".
+ */
+export async function checkOpenAIKey(apiKey: string, model: string): Promise<CheckResult> {
+  if (apiKey.trim() === '') return { ok: false, detail: 'No API key provided.' };
+
+  const client = new OpenAI({ apiKey, maxRetries: 1, timeout: CHECK_TIMEOUT_MS });
+
+  try {
+    const found = await client.models.retrieve(model);
+    return {
+      ok: true,
+      detail: `Key valid; ${found.id} is available.`,
+      info: { model: found.id },
+    };
+  } catch (err) {
+    if (err instanceof OpenAI.AuthenticationError) {
+      return { ok: false, detail: 'OpenAI rejected this key. Check it at platform.openai.com.' };
+    }
+    if (err instanceof OpenAI.NotFoundError) {
+      return {
+        ok: false,
+        detail: `The key works, but model "${model}" is not available to this account.`,
+      };
+    }
+    if (err instanceof OpenAI.PermissionDeniedError) {
+      return { ok: false, detail: 'This key does not have permission to use the Models API.' };
+    }
+    if (err instanceof OpenAI.APIConnectionError) {
+      return { ok: false, detail: 'Could not reach api.openai.com. Check your network.' };
+    }
+    return { ok: false, detail: describe(err) };
+  }
+}
+
+/** Check whichever provider is configured. */
+export function checkLlmKey(settings: LlmSettings): Promise<CheckResult> {
+  return settings.provider === 'openai'
+    ? checkOpenAIKey(settings.api_key, settings.model)
+    : checkAnthropicKey(settings.api_key, settings.model);
+}
+
+/**
  * Exercise the real request shape the daemon will use.
  *
  * A valid key does not prove structured outputs work: the schema still has to
  * compile server-side and the model still has to fill it. This is the only
  * check that covers that path, and it is the one that would have caught a
  * broken output_config before a user hit it from their phone. Costs a few
- * hundred Haiku tokens.
+ * hundred tokens on a small model.
  */
 export async function checkCommandParsing(
-  apiKey: string,
-  model: string,
+  settings: LlmSettings,
   workspaceRoot: string,
 ): Promise<CheckResult> {
-  const supervisor = new Supervisor({ anthropic: { api_key: apiKey, model } });
+  const supervisor = new Supervisor(settings);
 
   try {
     const parsed = await supervisor.parseCommand('show me the last 20 lines of the app log', {

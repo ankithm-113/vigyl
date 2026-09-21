@@ -35,7 +35,7 @@ import { SessionStore, type ChatKey, type SessionTurn } from './session';
 import { SelfHealingLoop, type AppliedPatch, type ProgressReporter, type StopReason } from './self-heal';
 import { Supervisor, SupervisorError, type ParsedCommand } from './supervisor';
 import type { ErrorType } from './monitor';
-import type { VigylConfig } from './config';
+import { resolveLlm, type VigylConfig } from './config';
 
 export const DAEMON_VERSION = '0.1.0';
 
@@ -177,7 +177,7 @@ export class VigylDaemon {
     this.config = config;
     this.security = new SecurityLayer(config.workspace_root);
     this.executor = parts.executor ?? new Executor(config);
-    this.supervisor = parts.supervisor ?? new Supervisor(config);
+    this.supervisor = parts.supervisor ?? new Supervisor(resolveLlm(config));
     this.selfHeal = new SelfHealingLoop(this.executor, this.supervisor, config);
     this.approvals = new ApprovalStore(config.hitl.timeout_seconds);
     // Under .vigyl/logs, alongside daemon.log, so one directory holds all output.
@@ -216,7 +216,7 @@ export class VigylDaemon {
     logger.info('Vigyl daemon started', {
       version: DAEMON_VERSION,
       workspace: this.security.workspaceRoot,
-      model: this.config.anthropic.model,
+      model: resolveLlm(this.config).model,
       selfHeal: this.config.self_heal.enabled,
     });
   }
@@ -240,7 +240,7 @@ export class VigylDaemon {
       busy: this.executor.isRunning,
       version: DAEMON_VERSION,
       workspaceRoot: this.security.workspaceRoot,
-      model: this.config.anthropic.model,
+      model: resolveLlm(this.config).model,
       pendingApprovals: this.approvals.size,
       ...(this.startedAt === undefined ? {} : { startedAt: this.startedAt }),
     };

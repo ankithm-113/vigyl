@@ -78,6 +78,7 @@ function makeConfig(overrides: Partial<VigylConfig['self_heal']> = {}): VigylCon
   return {
     workspace_root: workspace,
     telegram: { bot_token: '1:x', allowed_chat_ids: [1] },
+    provider: 'anthropic',
     anthropic: { api_key: 'sk-ant-test', model: 'claude-haiku-4-5' },
     hitl: { require_for: ['production'], timeout_seconds: 300 },
     self_heal: { enabled: true, max_retries: 3, context_lines: 80, ...overrides },

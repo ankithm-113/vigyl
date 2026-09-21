@@ -6,8 +6,8 @@
  * independent and none of them throw: a broken environment should produce a
  * list of problems, not a stack trace at the first one.
  *
- * The Anthropic and Telegram checks hit the live services. The structured-
- * output check costs a few hundred Haiku tokens; everything else is free.
+ * The LLM (OpenAI or Anthropic) and Telegram checks hit the live services. The
+ * structured-output check costs a few hundred tokens; everything else is free.
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -15,9 +15,9 @@ import * as path from 'path';
 import chalk from 'chalk';
 import {
   ConfigError,
-  DEFAULT_MODEL,
-  checkAnthropicKey,
   checkCommandParsing,
+  checkLlmKey,
+  resolveLlm,
   checkTelegramToken,
   diskUsagePercent,
   loadConfig,
@@ -178,20 +178,18 @@ export async function doctor(options: DoctorOptions = {}): Promise<number> {
     if (options.offline === true) {
       console.log(chalk.gray('\n  Skipping live credential checks (--offline).'));
     } else {
-      add('Anthropic key', fromCheck(await checkAnthropicKey(config.anthropic.api_key, config.anthropic.model)));
+      const llm = resolveLlm(config);
+      const label = llm.provider === 'openai' ? 'OpenAI key' : 'Anthropic key';
+      add(label, fromCheck(await checkLlmKey(llm)));
       add('Telegram token', fromCheck(await checkTelegramToken(config.telegram.bot_token)));
 
       // The only check that proves structured outputs work end to end. Costs
-      // a few hundred Haiku tokens, which is why it is called out.
+      // a few hundred tokens on a small model, which is why it is called out.
       console.log(chalk.gray('  … testing command parsing (uses a few tokens)'));
       add(
         'Command parsing',
         fromCheck(
-          await checkCommandParsing(
-            config.anthropic.api_key,
-            config.anthropic.model || DEFAULT_MODEL,
-            config.workspace_root,
-          ),
+          await checkCommandParsing(llm, config.workspace_root),
         ),
       );
     }

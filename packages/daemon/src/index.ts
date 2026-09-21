@@ -31,6 +31,11 @@ export {
   loadConfig,
   loadDotenv,
   resetConfig,
+  resolveLlm,
+  DEFAULT_OPENAI_MODEL,
+  PROVIDERS,
+  type LlmSettings,
+  type Provider,
   resolveConfigPath,
   type VigylConfig,
 } from './config';
@@ -77,6 +82,8 @@ export {
   captureChatId,
   checkAnthropicKey,
   checkCommandParsing,
+  checkLlmKey,
+  checkOpenAIKey,
   checkTelegramToken,
   type ChatIdResult,
   type CheckResult,
@@ -149,6 +156,15 @@ export {
   type SupervisorContext,
   type UnvalidatedPatch,
 } from './supervisor';
+
+export {
+  AnthropicProvider,
+  OpenAIProvider,
+  createProvider,
+  type LlmProvider,
+  type StructuredRequest,
+  type StructuredResponse,
+} from './llm';
 
 export {
   ERROR_TYPES,

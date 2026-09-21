@@ -13,10 +13,12 @@ import chalk from 'chalk';
 import ora from 'ora';
 import {
   captureChatId,
-  checkAnthropicKey,
   checkCommandParsing,
+  checkLlmKey,
   checkTelegramToken,
   DEFAULT_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  type LlmSettings,
   type CheckResult,
 } from '@vigyl/daemon';
 
@@ -76,12 +78,18 @@ async function promptUntilValid(
  * never land in shell history or a terminal transcript.
  */
 export async function runHeadless(cwd: string = process.cwd()): Promise<WizardResult | undefined> {
-  const apiKey = (process.env['ANTHROPIC_API_KEY'] ?? '').trim();
+  // OpenAI first; Anthropic only when it is the sole key present.
+  const openaiKey = (process.env['OPENAI_API_KEY'] ?? '').trim();
+  const anthropicKey = (process.env['ANTHROPIC_API_KEY'] ?? '').trim();
+  const llm: LlmSettings =
+    openaiKey === '' && anthropicKey !== ''
+      ? { provider: 'anthropic', api_key: anthropicKey, model: DEFAULT_MODEL }
+      : { provider: 'openai', api_key: openaiKey, model: DEFAULT_OPENAI_MODEL };
   const botToken = (process.env['TELEGRAM_BOT_TOKEN'] ?? '').trim();
   const workspace = (process.env['VIGYL_WORKSPACE'] ?? cwd).trim();
 
   const missing: string[] = [];
-  if (apiKey === '') missing.push('ANTHROPIC_API_KEY');
+  if (llm.api_key === '') missing.push('OPENAI_API_KEY');
   if (botToken === '') missing.push('TELEGRAM_BOT_TOKEN');
 
   if (missing.length > 0) {
@@ -93,14 +101,12 @@ export async function runHeadless(cwd: string = process.cwd()): Promise<WizardRe
   const resolvedWorkspace = fs.realpathSync.native(path.resolve(workspace));
   console.log(chalk.gray('  Workspace: ' + resolvedWorkspace));
 
-  const keyCheck = await withSpinner('Checking Anthropic API key...', () =>
-    checkAnthropicKey(apiKey, DEFAULT_MODEL),
-  );
+  const keyCheck = await withSpinner(`Checking ${llm.provider} API key...`, () => checkLlmKey(llm));
   if (!keyCheck.ok) return undefined;
 
   // The check that actually proves structured outputs work end to end.
   const parseCheck = await withSpinner('Testing structured-output command parsing...', () =>
-    checkCommandParsing(apiKey, DEFAULT_MODEL, resolvedWorkspace),
+    checkCommandParsing(llm, resolvedWorkspace),
   );
   if (!parseCheck.ok) return undefined;
 
@@ -121,7 +127,8 @@ export async function runHeadless(cwd: string = process.cwd()): Promise<WizardRe
   const config = {
     workspace_root: resolvedWorkspace,
     telegram: { bot_token: botToken, allowed_chat_ids: allowedChatIds },
-    anthropic: { api_key: apiKey, model: DEFAULT_MODEL },
+    provider: llm.provider,
+    [llm.provider]: { api_key: llm.api_key, model: llm.model },
     hitl: {
       require_for: ['production', 'env', 'delete', 'migrate', 'push'],
       timeout_seconds: 300,
@@ -156,21 +163,24 @@ export async function runWizard(cwd: string = process.cwd()): Promise<WizardResu
   const resolvedWorkspace = fs.realpathSync.native(path.resolve(workspaceRoot.trim()));
   console.log(chalk.gray(`  Vigyl will be confined to ${resolvedWorkspace}\n`));
 
-  // ---- Anthropic -----------------------------------------------------------
-  const anthropic = await promptUntilValid(
+  // ---- OpenAI --------------------------------------------------------------
+  // The interactive wizard sets up OpenAI, the default provider. Anthropic is
+  // still supported: set provider + anthropic in the config, or use headless init.
+  const openai = await promptUntilValid(
     {
       name: 'apiKey',
-      message: 'Anthropic API key:',
+      message: 'OpenAI API key:',
       validateShape: (value) =>
-        value.startsWith('sk-ant-') ? true : 'That does not look like an Anthropic key (sk-ant-…).',
+        value.startsWith('sk-') ? true : 'That does not look like an OpenAI key (sk-…).',
     },
-    (value) => checkAnthropicKey(value, DEFAULT_MODEL),
+    (value) => checkLlmKey({ provider: 'openai', api_key: value, model: DEFAULT_OPENAI_MODEL }),
   );
-  if (anthropic === undefined) return undefined;
+  if (openai === undefined) return undefined;
+  const llm: LlmSettings = { provider: 'openai', api_key: openai.value, model: DEFAULT_OPENAI_MODEL };
 
   // The only check that proves structured outputs actually work end to end.
   const parseCheck = await withSpinner('Testing command parsing (uses a few tokens)...', () =>
-    checkCommandParsing(anthropic.value, DEFAULT_MODEL, resolvedWorkspace),
+    checkCommandParsing(llm, resolvedWorkspace),
   );
   if (!parseCheck.ok) {
     const { proceed } = await inquirer.prompt<{ proceed: boolean }>([
@@ -243,7 +253,8 @@ export async function runWizard(cwd: string = process.cwd()): Promise<WizardResu
   const config = {
     workspace_root: resolvedWorkspace,
     telegram: { bot_token: telegram.value, allowed_chat_ids: allowedChatIds },
-    anthropic: { api_key: anthropic.value, model: DEFAULT_MODEL },
+    provider: 'openai',
+    openai: { api_key: llm.api_key, model: llm.model },
     hitl: {
       require_for: ['production', 'env', 'delete', 'migrate', 'push'],
       timeout_seconds: 300,

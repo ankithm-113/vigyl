@@ -209,11 +209,11 @@ export class SelfHealingLoop {
       }
       seenFailures.add(signature);
 
-      onProgress('🔧 Asking Claude for a fix...');
+      onProgress('🔧 Asking the model for a fix...');
 
       const proposal = await this.requestPatch(context);
       if (proposal === 'rate_limited') {
-        onProgress('⚠ Anthropic rate limit reached. Stopping so you can retry shortly.');
+        onProgress('⚠ LLM rate limit reached. Stopping so you can retry shortly.');
         return this.failure(attempt, lastExitCode, 'rate_limited', context, patches, lastOutput);
       }
       if (proposal === undefined) {

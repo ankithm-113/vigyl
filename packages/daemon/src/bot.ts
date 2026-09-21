@@ -258,9 +258,9 @@ export function explainStopReason(reason: StopReason): string {
     case 'not_auto_fixable':
       return 'This kind of failure cannot be fixed by editing a file — it needs you.';
     case 'no_patch_offered':
-      return 'Claude was not confident enough to propose a fix.';
+      return 'The model was not confident enough to propose a fix.';
     case 'rate_limited':
-      return 'Anthropic rate-limited us before a fix could be generated. Try again shortly.';
+      return 'The LLM provider rate-limited us before a fix could be generated. Try again shortly.';
     case 'patch_rejected':
       return 'A proposed fix targeted a file outside the workspace and was blocked.';
     case 'patch_write_failed':

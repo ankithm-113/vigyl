@@ -8,10 +8,12 @@ import {
   CONFIG_FILENAME,
   ConfigError,
   DEFAULT_MODEL,
+  DEFAULT_OPENAI_MODEL,
   getConfig,
   isConfigLoaded,
   loadConfig,
   resetConfig,
+  resolveLlm,
 } from './config';
 import { getLogLevel, setLogLevel } from './logger';
 
@@ -21,6 +23,8 @@ const ENV_KEYS = [
   'TELEGRAM_BOT_TOKEN',
   'VIGYL_ALLOWED_CHAT_IDS',
   'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'VIGYL_PROVIDER',
   'VIGYL_MODEL',
   'VIGYL_LOG_LEVEL',
   'VIGYL_HITL_TIMEOUT_SECONDS',
@@ -72,7 +76,7 @@ describe('loadConfig', () => {
     write(validConfig());
     const config = loadConfig(configPath);
 
-    assert.equal(config.anthropic.model, DEFAULT_MODEL);
+    assert.equal(config.anthropic?.model, DEFAULT_MODEL);
     assert.equal(config.daemon.log_level, 'info');
     assert.equal(config.daemon.log_retention_days, 7);
     assert.equal(config.hitl.timeout_seconds, 300);
@@ -114,7 +118,7 @@ describe('loadConfig', () => {
 
     const config = loadConfig(configPath);
 
-    assert.equal(config.anthropic.api_key, 'sk-ant-from-env');
+    assert.equal(config.anthropic?.api_key, 'sk-ant-from-env');
     assert.equal(config.daemon.log_level, 'debug');
     assert.deepEqual(config.telegram.allowed_chat_ids, [1, 2, 3]);
   });
@@ -127,7 +131,7 @@ describe('loadConfig', () => {
     const config = loadConfig(configPath);
 
     assert.equal(config.workspace_root, realTmpDir);
-    assert.equal(config.anthropic.api_key, 'sk-ant-env-only');
+    assert.equal(config.anthropic?.api_key, 'sk-ant-env-only');
   });
 
   it('applies daemon.log_level to the logger', () => {
@@ -148,7 +152,9 @@ describe('loadConfig error reporting', () => {
       () => loadConfig(configPath),
       (err: unknown) => {
         assert.ok(err instanceof ConfigError);
-        assert.match(err.message, /anthropic/);
+        // With no LLM block at all the default provider, OpenAI, is required.
+        assert.match(err.message, /openai\.api_key/);
+        assert.match(err.message, /OPENAI_API_KEY/);
         assert.match(err.message, /vigyl init/);
         return true;
       },
@@ -216,5 +222,75 @@ describe('getConfig', () => {
 
     resetConfig();
     assert.equal(isConfigLoaded(), false);
+  });
+});
+
+describe('LLM provider selection', () => {
+  function base(): Record<string, unknown> {
+    const { anthropic: _dropped, ...rest } = validConfig();
+    return rest;
+  }
+
+  it('defaults to OpenAI with gpt-4o-mini when OPENAI_API_KEY is set', () => {
+    write(base());
+    process.env['OPENAI_API_KEY'] = 'sk-proj-test';
+
+    const config = loadConfig(configPath);
+
+    assert.equal(config.provider, 'openai');
+    assert.deepEqual(resolveLlm(config), {
+      provider: 'openai',
+      api_key: 'sk-proj-test',
+      model: DEFAULT_OPENAI_MODEL,
+    });
+    assert.equal(DEFAULT_OPENAI_MODEL, 'gpt-4o-mini');
+  });
+
+  it('prefers OpenAI when both keys are present', () => {
+    write(validConfig());
+    process.env['OPENAI_API_KEY'] = 'sk-proj-test';
+
+    assert.equal(loadConfig(configPath).provider, 'openai');
+  });
+
+  it('falls back to Anthropic when it is the only key', () => {
+    write(validConfig());
+
+    const config = loadConfig(configPath);
+
+    assert.equal(config.provider, 'anthropic');
+    assert.equal(resolveLlm(config).model, DEFAULT_MODEL);
+  });
+
+  it('honours VIGYL_PROVIDER over auto-detection', () => {
+    write(validConfig());
+    process.env['OPENAI_API_KEY'] = 'sk-proj-test';
+    process.env['VIGYL_PROVIDER'] = 'anthropic';
+
+    assert.equal(loadConfig(configPath).provider, 'anthropic');
+  });
+
+  it('applies VIGYL_MODEL to the active provider only', () => {
+    write(validConfig());
+    process.env['OPENAI_API_KEY'] = 'sk-proj-test';
+    process.env['VIGYL_MODEL'] = 'gpt-4o';
+
+    const config = loadConfig(configPath);
+
+    assert.equal(config.openai?.model, 'gpt-4o');
+    assert.equal(config.anthropic?.model, DEFAULT_MODEL);
+  });
+
+  it('rejects an explicit provider whose block is missing', () => {
+    write({ ...validConfig(), provider: 'openai' });
+
+    assert.throws(
+      () => loadConfig(configPath),
+      (err: unknown) => {
+        assert.ok(err instanceof ConfigError);
+        assert.ok(err.problems.some((p) => p.includes('openai.api_key') && p.includes('OPENAI_API_KEY')));
+        return true;
+      },
+    );
   });
 });

@@ -28,7 +28,13 @@ export function loadDotenv(): void {
 }
 
 export const CONFIG_FILENAME = 'vigyl.config.json';
+/** Default Anthropic model. */
 export const DEFAULT_MODEL = 'claude-haiku-4-5';
+/** Default OpenAI model — the default provider. */
+export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+
+export const PROVIDERS = ['openai', 'anthropic'] as const;
+export type Provider = (typeof PROVIDERS)[number];
 
 /** Thrown for every config failure. Message is already human-readable. */
 export class ConfigError extends Error {
@@ -93,12 +99,27 @@ export const VigylConfigSchema = z
       })
       .strict(),
 
+    /**
+     * Which LLM vendor the Supervisor talks to. Only the matching block below
+     * needs to be present; the other is ignored.
+     */
+    provider: z.enum(PROVIDERS).default('openai'),
+
+    openai: z
+      .object({
+        api_key: z.string().min(1, 'required — create one at platform.openai.com'),
+        model: z.string().min(1).default(DEFAULT_OPENAI_MODEL),
+      })
+      .strict()
+      .optional(),
+
     anthropic: z
       .object({
         api_key: z.string().min(1, 'required — create one at console.anthropic.com'),
         model: z.string().min(1).default(DEFAULT_MODEL),
       })
-      .strict(),
+      .strict()
+      .optional(),
 
     hitl: z
       .object({
@@ -140,15 +161,42 @@ export const VigylConfigSchema = z
       .strict()
       .default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((config, ctx) => {
+    if (config[config.provider] === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [config.provider, 'api_key'],
+        message: `required — provider is "${config.provider}"`,
+      });
+    }
+  });
 
 export type VigylConfig = z.infer<typeof VigylConfigSchema>;
+
+/** The active provider's settings, flattened for the Supervisor. */
+export interface LlmSettings {
+  provider: Provider;
+  api_key: string;
+  model: string;
+}
+
+export function resolveLlm(config: Pick<VigylConfig, 'provider' | 'openai' | 'anthropic'>): LlmSettings {
+  const block = config[config.provider];
+  if (block === undefined) {
+    throw new ConfigError(`No ${config.provider} block configured for provider "${config.provider}".`);
+  }
+  return { provider: config.provider, api_key: block.api_key, model: block.model };
+}
 
 /** Which env var sets each field — used to make validation errors actionable. */
 const ENV_HINTS: Readonly<Record<string, string>> = {
   workspace_root: 'VIGYL_WORKSPACE',
   'telegram.bot_token': 'TELEGRAM_BOT_TOKEN',
   'telegram.allowed_chat_ids': 'VIGYL_ALLOWED_CHAT_IDS',
+  provider: 'VIGYL_PROVIDER',
+  'openai.api_key': 'OPENAI_API_KEY',
+  'openai.model': 'VIGYL_MODEL',
   'anthropic.api_key': 'ANTHROPIC_API_KEY',
   'anthropic.model': 'VIGYL_MODEL',
   'daemon.log_level': 'VIGYL_LOG_LEVEL',
@@ -225,6 +273,7 @@ function applyEnvOverrides(base: Record<string, unknown>): Record<string, unknow
   const merged: Record<string, unknown> = { ...base };
 
   const telegram = isRecord(base['telegram']) ? { ...base['telegram'] } : {};
+  const openai = isRecord(base['openai']) ? { ...base['openai'] } : {};
   const anthropic = isRecord(base['anthropic']) ? { ...base['anthropic'] } : {};
   const hitl = isRecord(base['hitl']) ? { ...base['hitl'] } : {};
   const daemonSection = isRecord(base['daemon']) ? { ...base['daemon'] } : {};
@@ -238,11 +287,28 @@ function applyEnvOverrides(base: Record<string, unknown>): Record<string, unknow
   const chatIds = process.env['VIGYL_ALLOWED_CHAT_IDS'];
   if (chatIds !== undefined && chatIds !== '') telegram['allowed_chat_ids'] = splitChatIds(chatIds);
 
-  const apiKey = process.env['ANTHROPIC_API_KEY'];
-  if (apiKey !== undefined && apiKey !== '') anthropic['api_key'] = apiKey;
+  const openaiKey = process.env['OPENAI_API_KEY'];
+  if (openaiKey !== undefined && openaiKey !== '') openai['api_key'] = openaiKey;
 
+  const anthropicKey = process.env['ANTHROPIC_API_KEY'];
+  if (anthropicKey !== undefined && anthropicKey !== '') anthropic['api_key'] = anthropicKey;
+
+  // Provider: explicit env > explicit file > OpenAI if it has a key >
+  // Anthropic if it has a key > OpenAI. OpenAI wins a tie on purpose.
+  const envProvider = process.env['VIGYL_PROVIDER'];
+  if (envProvider !== undefined && envProvider !== '') {
+    merged['provider'] = envProvider;
+  } else if (merged['provider'] === undefined) {
+    if (openai['api_key'] !== undefined) merged['provider'] = 'openai';
+    else if (anthropic['api_key'] !== undefined) merged['provider'] = 'anthropic';
+  }
+
+  // VIGYL_MODEL applies to whichever provider is active.
   const model = process.env['VIGYL_MODEL'];
-  if (model !== undefined && model !== '') anthropic['model'] = model;
+  if (model !== undefined && model !== '') {
+    if (merged['provider'] === 'anthropic') anthropic['model'] = model;
+    else openai['model'] = model;
+  }
 
   const logLevel = process.env['VIGYL_LOG_LEVEL'];
   if (logLevel !== undefined && logLevel !== '') daemonSection['log_level'] = logLevel;
@@ -253,6 +319,7 @@ function applyEnvOverrides(base: Record<string, unknown>): Record<string, unknow
   }
 
   if (Object.keys(telegram).length > 0) merged['telegram'] = telegram;
+  if (Object.keys(openai).length > 0) merged['openai'] = openai;
   if (Object.keys(anthropic).length > 0) merged['anthropic'] = anthropic;
   if (Object.keys(hitl).length > 0) merged['hitl'] = hitl;
   if (Object.keys(daemonSection).length > 0) merged['daemon'] = daemonSection;
@@ -268,8 +335,11 @@ function warnOnSuspiciousValues(config: VigylConfig): void {
         'Message the bot and add the chat ID it reports.',
     );
   }
-  if (!config.anthropic.api_key.startsWith('sk-ant-')) {
+  if (config.provider === 'anthropic' && config.anthropic?.api_key.startsWith('sk-ant-') === false) {
     logger.warn('anthropic.api_key does not look like an Anthropic key (expected sk-ant-…).');
+  }
+  if (config.provider === 'openai' && config.openai?.api_key.startsWith('sk-') === false) {
+    logger.warn('openai.api_key does not look like an OpenAI key (expected sk-…).');
   }
   if (!/^\d+:/.test(config.telegram.bot_token)) {
     logger.warn('telegram.bot_token does not look like a BotFather token (expected 123456:ABC…).');
@@ -314,7 +384,8 @@ export function loadConfig(configPath?: string): VigylConfig {
   logger.debug('Config loaded', {
     source,
     workspace_root: current.workspace_root,
-    model: current.anthropic.model,
+    provider: current.provider,
+    model: resolveLlm(current).model,
     allowed_chat_ids: current.telegram.allowed_chat_ids.length,
   });
   warnOnSuspiciousValues(current);
@@ -344,7 +415,8 @@ export function getDefaultConfig(workspaceRoot: string): Record<string, unknown>
   return {
     workspace_root: workspaceRoot,
     telegram: { bot_token: '', allowed_chat_ids: [] },
-    anthropic: { api_key: '', model: DEFAULT_MODEL },
+    provider: 'openai',
+    openai: { api_key: '', model: DEFAULT_OPENAI_MODEL },
     hitl: {
       require_for: ['production', 'env', 'delete', 'migrate', 'push'],
       timeout_seconds: 300,

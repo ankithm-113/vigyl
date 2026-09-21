@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import ora from 'ora';
-import { checkAnthropicKey, checkTelegramToken, ConfigError, loadConfig } from '@vigyl/daemon';
+import { checkLlmKey, checkTelegramToken, resolveLlm, ConfigError, loadConfig } from '@vigyl/daemon';
 import { isAlive, serviceState, spawnDetached, stdioLogPath, writePidRecord } from '../service';
 
 export interface StartOptions {
@@ -31,7 +31,7 @@ export async function start(options: StartOptions = {}, cwd: string = process.cw
   // that is simply not replying.
   if (options.skipChecks !== true) {
     const checks = [
-      ['Anthropic API key', () => checkAnthropicKey(config.anthropic.api_key, config.anthropic.model)],
+      [`${config.provider} API key`, () => checkLlmKey(resolveLlm(config))],
       ['Telegram bot token', () => checkTelegramToken(config.telegram.bot_token)],
     ] as const;
 

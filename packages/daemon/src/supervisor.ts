@@ -17,14 +17,14 @@
  * returns is trusted: Day 6 re-validates every path through SecurityLayer, and
  * destructive commands still go through the HITL gate.
  */
-import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 // zod/v4, not plain 'zod'. The installed zod@3.25 ships the v4 core alongside
 // classic v3, and the SDK's zodOutputFormat is written against v4 internals.
 // config.ts stays on classic v3; the two coexist in one installed package.
 import { z } from 'zod/v4';
 import { logger } from './logger';
-import type { VigylConfig } from './config';
+import { SupervisorError } from './errors';
+import { AnthropicProvider, createProvider, type LlmProvider } from './llm';
+import type { LlmSettings } from './config';
 
 /** Verbs the Supervisor is allowed to produce. */
 export const ACTIONS = [
@@ -41,33 +41,7 @@ export const ACTIONS = [
 
 export type Action = (typeof ACTIONS)[number];
 
-/**
- * What went wrong, so callers can react rather than just report.
- *
- * A rate limit is temporary and worth telling the user to retry; a bad key is
- * permanent and worth telling them to fix their config. Collapsing both into
- * one opaque error made the self-healing loop say "no fix available", which is
- * actively misleading when the truth is "we never got to ask".
- */
-export type SupervisorFailure =
-  | 'auth'
-  | 'rate_limit'
-  | 'timeout'
-  | 'connection'
-  | 'api'
-  | 'unknown';
-
-export class SupervisorError extends Error {
-  public readonly originalError?: unknown;
-  public readonly kind: SupervisorFailure;
-
-  constructor(message: string, kind: SupervisorFailure = 'unknown', originalError?: unknown) {
-    super(message);
-    this.name = 'SupervisorError';
-    this.kind = kind;
-    this.originalError = originalError;
-  }
-}
+export { SupervisorError, type SupervisorFailure } from './errors';
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -224,22 +198,22 @@ const PARSE_TIMEOUT_MS = 60_000;
 const PATCH_TIMEOUT_MS = 120_000;
 
 export class Supervisor {
-  private readonly client: Anthropic;
-  private readonly model: string;
+  private readonly provider: LlmProvider;
 
   /**
-   * @param options.client injected only by tests, so the request/response
+   * @param options.provider injected only by tests, so the request/response
    *   handling can be exercised without a live API key or a network call.
+   * @param options.client legacy test seam: a stub Anthropic client.
    */
-  constructor(config: Pick<VigylConfig, 'anthropic'>, options: { client?: Anthropic } = {}) {
-    this.client =
-      options.client ??
-      new Anthropic({
-        apiKey: config.anthropic.api_key,
-        // The SDK retries 429 and 5xx with exponential backoff itself.
-        maxRetries: 3,
-      });
-    this.model = config.anthropic.model;
+  constructor(
+    settings: LlmSettings,
+    options: { provider?: LlmProvider; client?: import('@anthropic-ai/sdk').default } = {},
+  ) {
+    this.provider =
+      options.provider ??
+      (options.client !== undefined
+        ? new AnthropicProvider(settings.api_key, settings.model, options.client)
+        : createProvider(settings));
   }
 
   /** Turn a plain-English request into a structured, still-untrusted command. */
@@ -250,31 +224,35 @@ export class Supervisor {
 
     const userContent =
       context.recentOutput === undefined || context.recentOutput.trim() === ''
-        ? `Developer request:\n${fence(userMessage)}`
-        : `Recent terminal output, for context only:\n${fence(context.recentOutput)}\n\n` +
-          `Developer request:\n${fence(userMessage)}`;
+        ? `Developer request:
+${fence(userMessage)}`
+        : `Recent terminal output, for context only:
+${fence(context.recentOutput)}
 
-    logger.debug('Parsing command', { model: this.model, length: userMessage.length });
+` +
+          `Developer request:
+${fence(userMessage)}`;
 
-    const response = await this.call(
-      () =>
-        this.client.messages.parse(
-          {
-            model: this.model,
-            max_tokens: PARSE_MAX_TOKENS,
-            system: buildParseSystemPrompt(context),
-            messages: [{ role: 'user', content: userContent }],
-            output_config: { format: zodOutputFormat(ParsedCommandSchema) },
-          },
-          { timeout: PARSE_TIMEOUT_MS },
-        ),
-      'parse the command',
-    );
+    logger.debug('Parsing command', {
+      provider: this.provider.name,
+      model: this.provider.model,
+      length: userMessage.length,
+    });
 
-    const parsed = response.parsed_output;
-    if (parsed === null || parsed === undefined) {
+    const response = await this.provider.structured({
+      schemaName: 'parsed_command',
+      schema: ParsedCommandSchema,
+      system: buildParseSystemPrompt(context),
+      user: userContent,
+      maxTokens: PARSE_MAX_TOKENS,
+      timeoutMs: PARSE_TIMEOUT_MS,
+      what: 'parse the command',
+    });
+
+    const parsed = response.parsed;
+    if (parsed === undefined) {
       throw new SupervisorError(
-        `Claude did not return a usable command (stop reason: ${response.stop_reason ?? 'unknown'}).`,
+        `The model did not return a usable command (stop reason: ${response.stopReason}).`,
         'api',
       );
     }
@@ -285,7 +263,7 @@ export class Supervisor {
       command: parsed.command,
       requiresApproval: parsed.requiresApproval,
       isDestructive: parsed.isDestructive,
-      usage: response.usage.input_tokens + response.usage.output_tokens,
+      usage: response.totalTokens,
     });
 
     return parsed;
@@ -305,30 +283,29 @@ export class Supervisor {
     workspaceRoot: string,
   ): Promise<UnvalidatedPatch | undefined> {
     const userContent =
-      `The command failed with this output:\n${fence(errorContext)}\n\n` +
-      `Relevant source:\n${fence(codeContext)}`;
+      `The command failed with this output:
+${fence(errorContext)}
 
-    logger.debug('Requesting patch', { model: this.model });
+` +
+      `Relevant source:
+${fence(codeContext)}`;
 
-    const response = await this.call(
-      () =>
-        this.client.messages.parse(
-          {
-            model: this.model,
-            max_tokens: PATCH_MAX_TOKENS,
-            system: buildPatchSystemPrompt(workspaceRoot),
-            messages: [{ role: 'user', content: userContent }],
-            output_config: { format: zodOutputFormat(PatchProposalSchema) },
-          },
-          { timeout: PATCH_TIMEOUT_MS },
-        ),
-      'generate a patch',
-    );
+    logger.debug('Requesting patch', { provider: this.provider.name, model: this.provider.model });
 
-    const proposal = response.parsed_output;
-    if (proposal === null || proposal === undefined) {
-      // max_tokens truncation lands here: a half-written file is not a patch.
-      logger.warn('No usable patch returned', { stopReason: response.stop_reason });
+    const response = await this.provider.structured({
+      schemaName: 'patch_proposal',
+      schema: PatchProposalSchema,
+      system: buildPatchSystemPrompt(workspaceRoot),
+      user: userContent,
+      maxTokens: PATCH_MAX_TOKENS,
+      timeoutMs: PATCH_TIMEOUT_MS,
+      what: 'generate a patch',
+    });
+
+    const proposal = response.parsed;
+    if (proposal === undefined) {
+      // Truncation lands here: a half-written file is not a patch.
+      logger.warn('No usable patch returned', { stopReason: response.stopReason });
       return undefined;
     }
 
@@ -336,50 +313,10 @@ export class Supervisor {
       canFix: proposal.canFix,
       filePath: proposal.filePath,
       explanation: proposal.explanation,
-      usage: response.usage.input_tokens + response.usage.output_tokens,
+      usage: response.totalTokens,
     });
 
     return toUnvalidatedPatch(proposal);
-  }
-
-  /** Normalise SDK failures into one error type with a message worth showing. */
-  private async call<T>(operation: () => Promise<T>, what: string): Promise<T> {
-    try {
-      return await operation();
-    } catch (err) {
-      if (err instanceof Anthropic.AuthenticationError) {
-        throw new SupervisorError(
-          'Anthropic rejected the API key. Check anthropic.api_key in vigyl.config.json.',
-          'auth',
-          err,
-        );
-      }
-      if (err instanceof Anthropic.RateLimitError) {
-        throw new SupervisorError(
-          'Anthropic rate limit reached and retries were exhausted. Try again shortly.',
-          'rate_limit',
-          err,
-        );
-      }
-      if (err instanceof Anthropic.APIConnectionTimeoutError) {
-        throw new SupervisorError(`Timed out waiting for Claude to ${what}.`, 'timeout', err);
-      }
-      if (err instanceof Anthropic.APIConnectionError) {
-        throw new SupervisorError(`Could not reach the Anthropic API to ${what}.`, 'connection', err);
-      }
-      if (err instanceof Anthropic.APIError) {
-        throw new SupervisorError(
-          `Anthropic API error while trying to ${what}: ${err.message}`,
-          'api',
-          err,
-        );
-      }
-      throw new SupervisorError(
-        `Unexpected failure while trying to ${what}: ${err instanceof Error ? err.message : String(err)}`,
-        'unknown',
-        err,
-      );
-    }
   }
 }
 
