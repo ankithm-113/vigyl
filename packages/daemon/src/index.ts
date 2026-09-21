@@ -190,6 +190,7 @@ export {
   ShellUnavailableError,
   cleanOutput,
   findExecutable,
+  ptyStatus,
   resolveShell,
   type ExecuteOptions,
   type ExecutionResult,

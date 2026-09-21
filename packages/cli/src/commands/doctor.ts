@@ -21,6 +21,7 @@ import {
   checkTelegramToken,
   diskUsagePercent,
   loadConfig,
+  ptyStatus,
   resolveShell,
   type CheckResult,
   type VigylConfig,
@@ -68,19 +69,11 @@ function shellAvailable(): CheckOutcome {
 }
 
 function ptyAvailable(): CheckOutcome {
-  try {
-    // node-pty is an optional dependency; without it nothing can be executed.
-    const pty = require('node-pty') as { spawn?: unknown };
-    if (typeof pty.spawn !== 'function') {
-      return { status: 'fail', detail: 'node-pty loaded but looks wrong.' };
-    }
-    return { status: 'pass', detail: 'node-pty is loadable' };
-  } catch (err) {
-    return {
-      status: 'fail',
-      detail: `node-pty could not be loaded: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
+  // Asked of the daemon package, which is the one that depends on node-pty.
+  const result = ptyStatus();
+  return result.ok
+    ? { status: 'pass', detail: 'node-pty is loadable' }
+    : { status: 'fail', detail: `node-pty could not be loaded: ${result.reason}` };
 }
 
 function workspaceWritable(config: VigylConfig): CheckOutcome {

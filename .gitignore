@@ -27,3 +27,6 @@ Thumbs.db
 
 # Internal build guide — stays local, never published
 build_docs/
+
+# copied from the root README at pack time
+packages/*/README.md

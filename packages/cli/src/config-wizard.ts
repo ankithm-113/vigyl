@@ -70,6 +70,13 @@ async function promptUntilValid(
   }
 }
 
+/** "1, -1002" -> [1, -1002]; undefined when any entry is not an integer. */
+export function parseChatIds(raw: string): number[] | undefined {
+  const parts = raw.split(',').map((part) => part.trim()).filter((part) => part !== '');
+  const ids = parts.map(Number);
+  return ids.every((id) => Number.isInteger(id)) ? ids : undefined;
+}
+
 /**
  * Headless setup, for CI and for any shell without a TTY.
  *
@@ -116,13 +123,25 @@ export async function runHeadless(cwd: string = process.cwd()): Promise<WizardRe
   if (!tokenCheck.ok) return undefined;
   const botUsername = String(tokenCheck.info?.['username'] ?? '');
 
-  console.log(chalk.yellow('  Message @' + botUsername + ' on Telegram now to authorize your chat.'));
-  const spinner = ora('Waiting for a message (2 minutes)...').start();
-  const captured = await captureChatId(botToken);
-  if (captured.ok && captured.chatId !== undefined) spinner.succeed(chalk.green(captured.detail));
-  else spinner.warn(chalk.yellow(captured.detail));
+  // Headless setups (CI, containers) know their chat already: do not block
+  // for two minutes waiting on a Telegram message nobody is going to send.
+  const presetIds = parseChatIds(process.env['VIGYL_ALLOWED_CHAT_IDS'] ?? '');
+  if (presetIds === undefined) {
+    console.error(chalk.red('VIGYL_ALLOWED_CHAT_IDS must be comma-separated whole numbers.'));
+    return undefined;
+  }
 
-  const allowedChatIds = captured.chatId === undefined ? [] : [captured.chatId];
+  let allowedChatIds: number[] = presetIds;
+  if (allowedChatIds.length > 0) {
+    console.log(chalk.gray('  Authorized chats from VIGYL_ALLOWED_CHAT_IDS: ' + allowedChatIds.join(', ')));
+  } else {
+    console.log(chalk.yellow('  Message @' + botUsername + ' on Telegram now to authorize your chat.'));
+    const spinner = ora('Waiting for a message (2 minutes)...').start();
+    const captured = await captureChatId(botToken);
+    if (captured.ok && captured.chatId !== undefined) spinner.succeed(chalk.green(captured.detail));
+    else spinner.warn(chalk.yellow(captured.detail));
+    allowedChatIds = captured.chatId === undefined ? [] : [captured.chatId];
+  }
 
   const config = {
     workspace_root: resolvedWorkspace,

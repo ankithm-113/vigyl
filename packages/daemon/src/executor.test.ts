@@ -11,6 +11,7 @@ import {
   cleanOutput,
   findExecutable,
   resolveShell,
+  ptyStatus,
 } from './executor';
 import { SecurityError } from './security';
 
@@ -220,5 +221,12 @@ describe('Executor.execute', () => {
     assert.equal(executor.isRunning, false);
     const second = await executor.execute(script('b.js', 'console.log("b");'));
     assert.match(second.cleanOutput, /b/);
+  });
+});
+
+describe('ptyStatus', () => {
+  it('reports node-pty loadable from the daemon package', () => {
+    // The dependency lives here, so this is where doctor must ask.
+    assert.deepEqual(ptyStatus(), { ok: true });
   });
 });

@@ -393,6 +393,24 @@ function loadPty(): typeof PtyModule {
   }
 }
 
+/**
+ * Whether node-pty can be loaded, resolved from THIS package.
+ *
+ * `vigyl doctor` used to require('node-pty') itself, which resolves from
+ * @vigyl/cli. In the monorepo that worked because dependencies are hoisted;
+ * in a real global install node-pty is nested under @vigyl/daemon, so doctor
+ * reported a working install as broken.
+ */
+export function ptyStatus(): { ok: true } | { ok: false; reason: string } {
+  try {
+    const pty = loadPty();
+    if (typeof pty.spawn !== 'function') return { ok: false, reason: 'node-pty loaded but looks wrong.' };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export class Executor extends EventEmitter {
   private readonly security: SecurityLayer;
   private readonly workspaceRoot: string;
