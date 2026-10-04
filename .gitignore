@@ -30,3 +30,4 @@ build_docs/
 
 # copied from the root README at pack time
 packages/*/README.md
+packages/*/LICENSE
