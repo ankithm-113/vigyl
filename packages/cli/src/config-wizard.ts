@@ -20,7 +20,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   type LlmSettings,
   type CheckResult,
-} from '@vigyl/daemon';
+} from '@vigylx/daemon';
 
 export const CONFIG_FILENAME = 'vigyl.config.json';
 

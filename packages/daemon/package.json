@@ -1,5 +1,5 @@
 {
-  "name": "@vigyl/daemon",
+  "name": "@vigylx/daemon",
   "version": "0.1.0",
   "description": "Vigyl engine: Telegram bot, LLM supervisor, sandboxed self-healing command runner.",
   "license": "MIT",

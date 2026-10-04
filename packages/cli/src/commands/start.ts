@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import ora from 'ora';
-import { checkLlmKey, checkTelegramToken, resolveLlm, ConfigError, loadConfig } from '@vigyl/daemon';
+import { checkLlmKey, checkTelegramToken, resolveLlm, ConfigError, loadConfig } from '@vigylx/daemon';
 import { isAlive, serviceState, spawnDetached, stdioLogPath, writePidRecord } from '../service';
 
 export interface StartOptions {

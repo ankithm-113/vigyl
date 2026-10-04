@@ -4,16 +4,16 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/ankithm-113/vigyl/main/scripts/install.sh | bash
 #
-# Installs @vigyl/cli globally and tells you what to do next. It does not run
+# Installs @vigylx/cli globally and tells you what to do next. It does not run
 # anything in your project and does not touch any credentials.
 #
 # If you would rather read before running (reasonable — you are piping a script
 # from the internet into a shell), everything it does is: check Node, run
-# `npm install -g @vigyl/cli`, print instructions.
+# `npm install -g @vigylx/cli`, print instructions.
 
 set -euo pipefail
 
-PACKAGE="@vigyl/cli"
+PACKAGE="@vigylx/cli"
 MIN_NODE_MAJOR=20
 
 # Colours only when attached to a terminal, so piped output stays clean.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { VERSION, loadDotenv } from '@vigyl/daemon';
+import { VERSION, loadDotenv } from '@vigylx/daemon';
 import { doctor } from './commands/doctor';
 import { init } from './commands/init';
 import { start } from './commands/start';

@@ -30,7 +30,7 @@ anything you care about.
 ## Install
 
 ```bash
-npm install -g @vigyl/cli
+npm install -g @vigylx/cli
 ```
 
 Or the one-liner:

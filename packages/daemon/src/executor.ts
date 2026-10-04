@@ -397,8 +397,8 @@ function loadPty(): typeof PtyModule {
  * Whether node-pty can be loaded, resolved from THIS package.
  *
  * `vigyl doctor` used to require('node-pty') itself, which resolves from
- * @vigyl/cli. In the monorepo that worked because dependencies are hoisted;
- * in a real global install node-pty is nested under @vigyl/daemon, so doctor
+ * @vigylx/cli. In the monorepo that worked because dependencies are hoisted;
+ * in a real global install node-pty is nested under @vigylx/daemon, so doctor
  * reported a working install as broken.
  */
 export function ptyStatus(): { ok: true } | { ok: false; reason: string } {

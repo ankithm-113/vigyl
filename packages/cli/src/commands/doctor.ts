@@ -25,7 +25,7 @@ import {
   resolveShell,
   type CheckResult,
   type VigylConfig,
-} from '@vigyl/daemon';
+} from '@vigylx/daemon';
 import { serviceState } from '../service';
 
 export type Verdict = 'pass' | 'warn' | 'fail';

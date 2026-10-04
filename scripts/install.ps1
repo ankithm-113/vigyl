@@ -2,12 +2,12 @@
 #
 #   irm https://raw.githubusercontent.com/ankithm-113/vigyl/main/scripts/install.ps1 | iex
 #
-# Installs @vigyl/cli globally and tells you what to do next. It does not run
+# Installs @vigylx/cli globally and tells you what to do next. It does not run
 # anything in your project and does not touch any credentials.
 
 $ErrorActionPreference = 'Stop'
 
-$Package = '@vigyl/cli'
+$Package = '@vigylx/cli'
 $MinNodeMajor = 20
 
 function Write-Ok    { param($Text) Write-Host "> $Text" -ForegroundColor Green }

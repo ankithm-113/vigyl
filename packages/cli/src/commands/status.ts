@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { ConfigError, loadConfig, resolveLlm } from '@vigyl/daemon';
+import { ConfigError, loadConfig, resolveLlm } from '@vigylx/daemon';
 import { logFilePath, removePidFile, serviceState } from '../service';
 
 function humanUptime(sinceMs: number): string {

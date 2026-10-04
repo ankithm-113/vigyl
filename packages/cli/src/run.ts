@@ -6,7 +6,7 @@
  * background differ only in who owns the terminal.
  */
 import chalk from 'chalk';
-import { ConfigError, TelegramInterface, VigylDaemon, loadConfig, logger } from '@vigyl/daemon';
+import { ConfigError, TelegramInterface, VigylDaemon, loadConfig, logger } from '@vigylx/daemon';
 import { removePidFile, writePidRecord } from './service';
 
 export async function runForeground(cwd: string = process.cwd()): Promise<number> {

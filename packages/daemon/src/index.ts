@@ -1,8 +1,8 @@
 /**
- * @vigyl/daemon — public surface.
+ * @vigylx/daemon — public surface.
  *
  * This package is a library. The user-facing `vigyl` binary lives in
- * @vigyl/cli, which depends on this package. Nothing here should call
+ * @vigylx/cli, which depends on this package. Nothing here should call
  * process.exit() or write to stdout directly — that is the CLI's job.
  *
  * Build order (Month 1, Week 1):
