@@ -2,7 +2,7 @@
   "name": "@vigylx/cli",
   "version": "0.1.0",
   "description": "Control your server from Telegram in plain English. Self-healing builds, human approval for anything destructive.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {

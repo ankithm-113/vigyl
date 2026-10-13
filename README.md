@@ -245,4 +245,10 @@ binary. Current build status and design decisions live in
 
 ## Licence
 
-MIT
+**AGPL-3.0-only** from v0.1.1 onwards. Copyright (c) 2026 Ankith M.
+
+You may use, modify and self-host it freely. If you run a modified version as a
+network service, the AGPL requires you to publish your changes.
+
+v0.1.0 on npm was published under MIT, and that release stays MIT — a licence
+cannot be revoked retroactively.

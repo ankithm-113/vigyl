@@ -2,7 +2,7 @@
   "name": "@vigylx/daemon",
   "version": "0.1.0",
   "description": "Vigyl engine: Telegram bot, LLM supervisor, sandboxed self-healing command runner.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

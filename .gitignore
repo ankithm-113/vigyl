@@ -31,3 +31,7 @@ build_docs/
 # copied from the root README at pack time
 packages/*/README.md
 packages/*/LICENSE
+
+# Local-only trackers: the roadmap stays out of the public repo
+PROGRESS.md
+CLAUDE.md
