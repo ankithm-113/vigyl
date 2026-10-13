@@ -6,6 +6,10 @@ Send your bot "run the test suite" and it runs. Send "deploy to staging" and it
 deploys. If a build fails, Vigyl reads the error, tries to fix it, and runs it
 again — and asks you first before anything destructive.
 
+![Vigyl healing a failing test suite from Telegram](https://raw.githubusercontent.com/ankithm-113/vigyl/main/docs/demo.gif)
+
+*A real run: the test fails, Vigyl patches `sum.js`, the re-run passes — six seconds, unedited.*
+
 ```
 you  ▸ run the build
 bot  ▸ 🧠 Working out what to run...

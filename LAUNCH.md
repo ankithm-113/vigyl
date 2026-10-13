@@ -13,7 +13,7 @@ needed except where a line says `← CHOOSE`.
 
 - [x] repo public, description + topics set, v0.1.0 released
 - [x] npm 2FA back on, publish tokens deleted
-- [ ] demo GIF recorded (see `docs/DEMO.md`) — the only blocker left
+- [x] demo GIF recorded and committed as `docs/demo.gif` (3.2 MB, 14s) — an `.mp4` of the same cut is better for X and Reddit
 - [ ] `npm i -g @vigylx/cli` run once on a machine that has never seen Vigyl
 - [ ] GIF attached to the release body (drag it in: Releases → v0.1.0 → Edit)
 
