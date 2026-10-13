@@ -21,7 +21,7 @@ bot  ▸ 🧠 Working out what to run...
 
 ## Status
 
-**v0.1.0 — private beta.** Built and tested, but young. Read
+**v0.1.0 — early beta.** Built and tested, but young. Read
 [What is not proven yet](#what-is-not-proven-yet) before pointing it at
 anything you care about.
 

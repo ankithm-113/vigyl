@@ -3,26 +3,21 @@
 Everything below is final copy. Copy the block, paste it, post it. No editing
 needed except where a line says `← CHOOSE`.
 
-**One decision first.** Every post needs a link. The repo is private, so:
+**The links to use everywhere:**
 
-- **Option 1 (recommended): link the npm page only.** `https://www.npmjs.com/package/@vigylx/cli`
-  Works today. No stars possible — stars need a public repo.
-- **Option 2: create a public docs-only repo** (README + docs + install scripts,
-  no `packages/`), link that, and get stars + an issues page without exposing
-  the source.
-
-All copy below uses the npm link. If you go with Option 2, add the repo link
-under it.
+- repo: `https://github.com/ankithm-113/vigyl`
+- npm: `https://www.npmjs.com/package/@vigylx/cli`
+- release: `https://github.com/ankithm-113/vigyl/releases/tag/v0.1.0`
 
 **Before posting:**
 
-- [ ] publish `0.1.1` to npm (the `0.1.0` README points at a private repo —
-      every `curl`/`git clone` line in it 404s for users)
-- [ ] demo GIF recorded (see `docs/DEMO.md`)
+- [x] repo public, description + topics set, v0.1.0 released
+- [x] npm 2FA back on, publish tokens deleted
+- [ ] demo GIF recorded (see `docs/DEMO.md`) — the only blocker left
 - [ ] `npm i -g @vigylx/cli` run once on a machine that has never seen Vigyl
-- [ ] npm 2FA back on, publish tokens deleted
+- [ ] GIF attached to the release body (drag it in: Releases → v0.1.0 → Edit)
 
-**Rule for every channel:** say it is a private beta tested by one person. The
+**Rule for every channel:** say it is an early beta tested by one person. The
 honesty is the pitch. People can tell the difference between "I shipped a thing"
 and "I shipped a thing and here is exactly where it breaks", and only one of
 those gets a second look.
@@ -85,12 +80,12 @@ Patches are sandboxed to your workspace and backed up before any overwrite.
 Post 5:
 
 ```
-v0.1.0, private beta, MIT. 424 tests.
+v0.1.0, early beta, AGPL-3.0. 424 tests.
 
 Live testing so far is one laptop, one model (gpt-4o-mini), a handful of
 scenarios. The README lists exactly what is unproven.
 
-npmjs.com/package/@vigylx/cli
+github.com/ankithm-113/vigyl
 ```
 
 ---
@@ -108,7 +103,7 @@ Show HN: Vigyl – control your server from Telegram in plain English
 **URL:**
 
 ```
-https://www.npmjs.com/package/@vigylx/cli
+https://github.com/ankithm-113/vigyl
 ```
 
 **Then post this as the first comment on your own submission:**
@@ -138,6 +133,7 @@ treated as untrusted input because any dependency's postinstall script can print
 whatever it likes into the prompt.
 
 npm i -g @vigylx/cli
+AGPL-3.0, 424 tests.
 
 Happy to be told where the design is wrong — particularly about handing an LLM
 write access to a real repo at all.
@@ -163,11 +159,12 @@ hostile command is the workspace confinement, running as non-root, and the
 approval gate.
 ```
 
-**"Why is the repo not public?"**
+**"Why AGPL and not MIT?"**
 ```
-It is a private beta and I am not ready to maintain a public repo yet. The
-package is MIT and installable today; the source ships readable in the npm
-tarball.
+Because I would rather someone's improvements come back than be absorbed into a
+closed product. Use it, self-host it, modify it freely — the only obligation
+kicks in if you run a modified version as a service for others. v0.1.0 went out
+under MIT and stays MIT; AGPL starts at v0.1.1.
 ```
 
 **"Why Telegram?"**
@@ -203,11 +200,13 @@ npm i -g @vigylx/cli
 - confined to one workspace directory, every overwrite backed up
 - health alerts for CPU, memory, disk and any HTTP/TCP service you list
 
-Honest status: v0.1.0 private beta, live-tested by exactly one person (me) on
+Honest status: v0.1.0 early beta, live-tested by exactly one person (me) on
 Windows against gpt-4o-mini. The README has a "what is not proven yet" section.
 
 Would like feedback on whether the default approval keywords
 (production/env/delete/migrate/push) match what you would actually gate.
+
+https://github.com/ankithm-113/vigyl
 ```
 
 ### r/devops — https://www.reddit.com/r/devops/submit
@@ -229,8 +228,8 @@ file the model was shown in full.
 Destructive commands hit a human-in-the-loop gate: inline Approve/Deny in
 Telegram, with keyword rules owned by the operator rather than by the model.
 
-npm i -g @vigylx/cli — v0.1.0, MIT, private beta, 424 tests, live-tested on one
-machine so far.
+npm i -g @vigylx/cli — v0.1.0, AGPL-3.0, early beta, 424 tests, live-tested
+on one machine so far. Source: https://github.com/ankithm-113/vigyl
 
 The design question I keep going back and forth on: should an agent be allowed
 to edit more than one file per attempt? Right now it cannot, and the cases it
@@ -245,9 +244,10 @@ fails on are exactly the ones needing coordinated edits.
 Just shipped Vigyl v0.1.0 — 30 days from idea to a published npm package.
 
 It lets you run your server from Telegram in plain English, and when a build
-breaks it patches the file and retries. MIT, free.
+breaks it patches the file and retries. AGPL-3.0, free.
 
 npm i -g @vigylx/cli
+github.com/ankithm-113/vigyl
 
 Three things I learned shipping it:
 
@@ -267,8 +267,10 @@ Three things I learned shipping it:
 
 ## 5. After posting (Days 27–28)
 
-Answer every comment, issue and DM. This is where v0.2.0 comes from. Keep a
-running note in PROGRESS.md:
+Answer every comment, issue and DM — GitHub issues is the channel the README
+and these posts point at, so watch
+<https://github.com/ankithm-113/vigyl/issues>. This is where v0.2.0 comes from.
+Keep a running note in PROGRESS.md:
 
 1. The 3 most common feature requests
 2. The 3 most common setup problems
@@ -282,3 +284,5 @@ Two answers to have ready:
   against a live key.
 - **"Can I use it without Telegram?"** Not in v0.1.0. An MCP server so other
   agents can drive it is next — see `docs/MCP-ARCHITECTURE.md`.
+- **"Can I contribute?"** Yes, issues and PRs. Be honest that it is one
+  person's beta and the architecture may still move under them.

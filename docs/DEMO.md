@@ -86,13 +86,16 @@ ffmpeg -ss 00:00:03 -t 15 -i recording.mp4 -vf "fps=12,scale=480:-1:flags=lanczo
 
 - Attach to the first X post (`LAUNCH.md` section 1).
 - Attach to both Reddit posts.
-- Do **not** attach it to the Hacker News comment — HN is text only; the npm
+- Do **not** attach it to the Hacker News comment — HN is text only; the repo
   page link carries it.
-- Put it in the GitHub release body if you make the release public.
-- To show it on the npm page, the GIF needs a public URL. Easiest without a
-  public repo: upload it to the GitHub release as an asset and use that link, or
-  host it anywhere public, then reference it from the README and publish a patch
-  version.
+- Drag it into the v0.1.0 release body: Releases → v0.1.0 → Edit → drop the
+  GIF in → Update release.
+- To show it in the README (and so on the npm page at the next publish): commit
+  it as `docs/demo.gif` and reference it with
+  `![demo](docs/demo.gif)` near the top. GitHub renders it from the repo; npm
+  needs an absolute URL, so use
+  `https://raw.githubusercontent.com/ankithm-113/vigyl/main/docs/demo.gif`
+  there.
 
 ## Sanity check before you use it
 

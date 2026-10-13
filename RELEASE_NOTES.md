@@ -1,4 +1,4 @@
-# Vigyl v0.1.0 — private beta
+# Vigyl v0.1.0 — early beta
 
 **Control your server from Telegram, in plain English.** Send your bot "run the
 tests" and it runs them. If the build breaks, Vigyl reads the error, patches the
@@ -106,7 +106,7 @@ Threat model and what Vigyl does *not* protect against:
 
 ## Feedback
 
-This is a private beta and the install path has been walked by one person. If
+This is an early beta and the install path has been walked by one person. If
 `vigyl doctor` says something confusing, or self-heal does something daft,
 [open an issue](https://github.com/ankithm-113/vigyl/issues) — that is exactly
 what v0.2.0 gets built from.
