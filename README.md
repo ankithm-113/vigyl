@@ -97,6 +97,7 @@ vigyl init --non-interactive
 | `vigyl stop` | Stop the daemon |
 | `vigyl status` | Is it running? |
 | `vigyl logs -n 100` | Recent daemon log lines |
+| `vigyl logs -f` | Follow the log until Ctrl+C |
 
 `vigyl doctor` is the fastest way to find out why something is not working:
 

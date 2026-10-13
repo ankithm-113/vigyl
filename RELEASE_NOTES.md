@@ -47,11 +47,15 @@ default, well under a cent per command.
   same normalised errors either way.
 - **Operations.** `vigyl doctor` checks environment, config and live
   credentials in one pass. Sessions, durable command history, `/history`,
-  `/repeat`, full log retrieval, and health alerts for CPU, memory and disk.
+  `/repeat`, full log retrieval, `vigyl logs -f`, and health alerts for CPU,
+  memory, disk and any HTTP or TCP service you list in `monitor.services`.
+- **Live output** is streamed into one Telegram message that is edited in
+  place, with an activity bar and elapsed time so a quiet build does not look
+  hung.
 - **Secrets stay out of logs.** Every log record is redacted: credential-shaped
   fields, plus OpenAI, Anthropic and bot-token patterns in free text.
 
-402 tests (385 daemon, 17 CLI), including tests that run real commands and
+424 tests (402 daemon, 22 CLI), including tests that run real commands and
 patch real files on disk.
 
 ## Verified live, not just in tests

@@ -182,3 +182,33 @@ describe('requiresApproval', () => {
     assert.equal(layer.requiresApproval('git status', triggers), false);
   });
 });
+
+describe('eval() is blocked (build guide Day 3)', () => {
+  const layer = (): SecurityLayer => new SecurityLayer(process.cwd());
+
+  const blocked = [
+    'eval(rm -rf /)',
+    'node -e "eval(process.argv[1])"',
+    'EVAL (something)',
+    'sh -c "x; eval($PAYLOAD)"',
+  ];
+  for (const command of blocked) {
+    it('rejects: ' + command, () => {
+      assert.throws(
+        () => layer().validateCommand(command),
+        (err: unknown) => {
+          assert.ok(err instanceof SecurityError);
+          assert.match(err.message, /eval/i);
+          return true;
+        },
+      );
+    });
+  }
+
+  const allowed = ['npm run evaluate', 'node scripts/evaluation.js', 'npm test -- --grep medieval'];
+  for (const command of allowed) {
+    it('does not false-positive on: ' + command, () => {
+      assert.doesNotThrow(() => layer().validateCommand(command));
+    });
+  }
+});

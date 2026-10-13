@@ -7,7 +7,7 @@ import { init } from './commands/init';
 import { start } from './commands/start';
 import { status } from './commands/status';
 import { stop } from './commands/stop';
-import { logFilePath, readLogTail } from './service';
+import { followLog, logFilePath, readLogTail } from './service';
 
 // Before anything else: `vigyl init` needs credentials from .env, and it
 // runs before any config file exists for loadConfig() to read.
@@ -71,18 +71,30 @@ program
   .command('logs')
   .description('Show recent daemon log lines')
   .option('-n, --tail <lines>', 'how many lines to show', '50')
-  .action((options: { tail: string }) => {
+  .option('-f, --follow', 'keep printing new lines until Ctrl+C')
+  .action((options: { tail: string; follow?: boolean }) => {
     const requested = Number.parseInt(options.tail, 10);
     const count = Number.isInteger(requested) && requested > 0 ? requested : 50;
     const lines = readLogTail(count);
 
-    if (lines.length === 0) {
+    if (lines.length === 0 && options.follow !== true) {
       console.log(chalk.gray(`No log entries yet (${logFilePath()}).`));
       return;
     }
-    // Deliberately not `tail -f`: the build guide shells out to it, which does
-    // not exist on Windows and would make `vigyl logs` platform-specific.
     for (const line of lines) console.log(line);
+
+    if (options.follow !== true) return;
+
+    // Polled in-process rather than `tail -f`: the build guide shells out to
+    // it, which does not exist on Windows.
+    console.log(chalk.gray(`-- following ${logFilePath()} (Ctrl+C to stop) --`));
+    const stop = followLog((line) => console.log(line));
+    const finish = (): void => {
+      stop();
+      process.exit(0);
+    };
+    process.on('SIGINT', finish);
+    process.on('SIGTERM', finish);
   });
 
 program

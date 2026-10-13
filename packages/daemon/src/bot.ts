@@ -37,6 +37,16 @@ const OUTPUT_BUDGET = 3_000;
 const EDIT_INTERVAL_MS = 1_200;
 /** Progress lines kept on screen at once. */
 const PROGRESS_WINDOW = 8;
+/** Cells in the activity bar shown above streamed output. */
+export const PROGRESS_BAR_CELLS = 10;
+/**
+ * A build's duration is unknown, so the bar cannot show a percentage without
+ * inventing one. It shows motion plus elapsed time instead: a filled block
+ * sweeping a fixed-width track, which is what tells someone on a phone that
+ * the thing is still alive.
+ */
+const BAR_FILLED = String.fromCharCode(0x25b0); // ▰
+const BAR_EMPTY = String.fromCharCode(0x25b1); // ▱
 
 export const CALLBACK_APPROVE = 'approve';
 export const CALLBACK_DENY = 'deny';
@@ -391,9 +401,24 @@ export function createFloodControl(policy: RetryPolicy = DEFAULT_RETRY_POLICY) {
  * timer; the newest state always wins, so a dropped intermediate frame costs
  * nothing.
  */
+/** `▰▱▱▱▱▱▱▱▱▱ 0:07` — position sweeps with each frame. */
+export function progressBar(frame: number, elapsedMs: number, cells = PROGRESS_BAR_CELLS): string {
+  const position = ((frame % cells) + cells) % cells;
+  let track = '';
+  for (let cell = 0; cell < cells; cell++) track += cell === position ? BAR_FILLED : BAR_EMPTY;
+
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const stamp = `${minutes}:${String(seconds).padStart(2, '0')}`;
+  return `${track} ${stamp}`;
+}
+
 class ProgressPresenter {
   private readonly ctx: Context;
   private readonly lines: string[] = [];
+  private readonly startedAt = Date.now();
+  private frame = 0;
   private messageId: number | undefined;
   private lastEditAt = 0;
   private timer: NodeJS.Timeout | undefined;
@@ -420,13 +445,16 @@ class ProgressPresenter {
   }
 
   private currentText(): string {
-    return clampMessage(codeBlock(this.lines.slice(-PROGRESS_WINDOW).join('\n')));
+    const bar = progressBar(this.frame, Date.now() - this.startedAt);
+    const body = codeBlock(this.lines.slice(-PROGRESS_WINDOW).join('\n'));
+    return clampMessage(`${bar}${String.fromCharCode(10)}${body}`);
   }
 
   private async flush(): Promise<void> {
     if (this.sending || this.lines.length === 0) return;
     this.sending = true;
     this.lastEditAt = Date.now();
+    this.frame++;
 
     try {
       const text = this.currentText();
@@ -446,7 +474,22 @@ class ProgressPresenter {
       });
     } finally {
       this.sending = false;
+      this.heartbeat();
     }
+  }
+
+  /**
+   * Keep the bar moving while a step produces no output.
+   *
+   * `npm ci` can go quiet for a minute; without this the message freezes and
+   * looks hung even though the command is fine.
+   */
+  private heartbeat(): void {
+    if (this.timer !== undefined || this.lines.length === 0) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.flush();
+    }, EDIT_INTERVAL_MS * 4);
   }
 
   /** Stop the timer. The result message is sent by the caller. */
@@ -908,6 +951,10 @@ const HELP = `<b>Vigyl command reference</b>
 <b>Services</b>
 • Restart the API service
 • Is Redis running?
+
+<b>Files</b>
+• Show me the .env file <i>(needs approval)</i>
+• Create a file called notes.txt <i>(needs approval)</i>
 
 /monitor on|off|status — health alerts
 /history — recent commands

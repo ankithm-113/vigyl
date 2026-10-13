@@ -18,10 +18,41 @@
  * would silently report a permanently idle machine there.
  */
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import { logger } from './logger';
 
 export type MetricId = 'cpu' | 'memory' | 'disk';
+
+/**
+ * Identity of an alert. Machine metrics are fixed; a service alert carries the
+ * service's name so the cooldown and the recovery-clears rule apply per
+ * service rather than to "services" as a lump.
+ */
+export type AlertId = MetricId | string;
+
+/**
+ * A service to check liveness of. Either an HTTP(S) url or a TCP host/port —
+ * the two things you can check without assuming systemd, pm2 or Docker.
+ */
+export interface ServiceTarget {
+  name: string;
+  /** HTTP(S) endpoint. Any status under 500 counts as up. */
+  url?: string;
+  /** TCP port; `host` defaults to 127.0.0.1. */
+  port?: number;
+  host?: string;
+}
+
+export interface ServiceStatus {
+  name: string;
+  up: boolean;
+  /** One line, safe to show: status code, or why the connection failed. */
+  detail: string;
+}
+
+/** How long a single service probe may take before it counts as down. */
+export const SERVICE_PROBE_TIMEOUT_MS = 5_000;
 
 export interface HealthThresholds {
   cpuPercent: number;
@@ -44,10 +75,16 @@ export interface HealthMetrics {
 }
 
 export interface HealthAlert {
-  metric: MetricId;
-  value: number;
-  threshold: number;
+  metric: AlertId;
+  /** Absent for service alerts, which are up/down rather than a reading. */
+  value?: number;
+  threshold?: number;
   message: string;
+}
+
+/** Alert id for a service, namespaced so it cannot collide with a metric. */
+export function serviceAlertId(name: string): string {
+  return `service:${name}`;
 }
 
 /** Sample CPU busy-time across all cores over `windowMs`. */
@@ -112,6 +149,78 @@ export async function collectMetrics(workspaceRoot: string): Promise<HealthMetri
   };
 }
 
+/**
+ * Check one service. Never throws: a failed probe IS the result.
+ *
+ * HTTP: any response under 500 means something is listening and answering, so
+ * a 404 counts as up — the check is "is the service alive", not "is this route
+ * correct". 5xx means it is up but broken, which is worth an alert.
+ */
+export async function probeService(
+  target: ServiceTarget,
+  timeoutMs = SERVICE_PROBE_TIMEOUT_MS,
+): Promise<ServiceStatus> {
+  if (target.url !== undefined && target.url !== '') {
+    try {
+      const response = await fetch(target.url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return response.status >= 500
+        ? { name: target.name, up: false, detail: `HTTP ${response.status}` }
+        : { name: target.name, up: true, detail: `HTTP ${response.status}` };
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        return { name: target.name, up: false, detail: 'timed out' };
+      }
+      // fetch wraps the real failure: bare "fetch failed" in an alert tells
+      // nobody anything, where ECONNREFUSED does.
+      const cause =
+        err instanceof Error ? (err.cause as { code?: string; message?: string } | undefined) : undefined;
+      const reason = err instanceof Error ? err.message : String(err);
+      const because = cause?.code ?? cause?.message;
+      const detail = because === undefined ? reason : `${reason}: ${because}`;
+      return { name: target.name, up: false, detail };
+    }
+  }
+
+  if (target.port !== undefined) {
+    const host = target.host === undefined || target.host === '' ? '127.0.0.1' : target.host;
+    return await new Promise<ServiceStatus>((resolve) => {
+      const socket = new net.Socket();
+      const settle = (status: ServiceStatus): void => {
+        socket.removeAllListeners();
+        socket.destroy();
+        resolve(status);
+      };
+      socket.setTimeout(timeoutMs);
+      socket.once('connect', () => settle({ name: target.name, up: true, detail: `port ${target.port!} open` }));
+      socket.once('timeout', () => settle({ name: target.name, up: false, detail: 'timed out' }));
+      socket.once('error', (err: Error) => settle({ name: target.name, up: false, detail: err.message }));
+      socket.connect(target.port!, host);
+    });
+  }
+
+  return { name: target.name, up: false, detail: 'no url or port configured' };
+}
+
+export function probeServices(
+  targets: readonly ServiceTarget[],
+  timeoutMs = SERVICE_PROBE_TIMEOUT_MS,
+): Promise<ServiceStatus[]> {
+  return Promise.all(targets.map((target) => probeService(target, timeoutMs)));
+}
+
+/** One alert per service that is down. Pure, so the policy is testable. */
+export function evaluateServices(statuses: readonly ServiceStatus[]): HealthAlert[] {
+  return statuses
+    .filter((status) => !status.up)
+    .map((status) => ({
+      metric: serviceAlertId(status.name),
+      message: `Service ${status.name} is DOWN (${status.detail})`,
+    }));
+}
+
 /** Compare metrics against thresholds. Pure, so the policy is testable. */
 export function evaluate(
   metrics: HealthMetrics,
@@ -160,7 +269,7 @@ export function evaluate(
  * for an hour after recovering — and "goes quiet" is the dangerous one.
  */
 export class AlertThrottle {
-  private readonly lastSent = new Map<MetricId, number>();
+  private readonly lastSent = new Map<AlertId, number>();
   private cooldownMs: number;
 
   constructor(cooldownSeconds: number) {
@@ -190,7 +299,7 @@ export class AlertThrottle {
   }
 
   /** Metrics currently considered "already reported". */
-  get suppressed(): MetricId[] {
+  get suppressed(): AlertId[] {
     return [...this.lastSent.keys()];
   }
 
@@ -207,6 +316,8 @@ export interface MonitorOptions {
   cooldownSeconds: number;
   thresholds: HealthThresholds;
   notify: AlertNotifier;
+  /** Services to check for liveness each tick. Empty by default. */
+  services?: readonly ServiceTarget[];
 }
 
 export class HealthMonitor {
@@ -286,7 +397,11 @@ export class HealthMonitor {
 
     try {
       const metrics = await collectMetrics(this.options.workspaceRoot);
-      const breaches = evaluate(metrics, this.options.thresholds);
+      const services = this.options.services ?? [];
+      // Probed every tick alongside the metrics: a service that is down is the
+      // alert people actually want, and it is cheap to check.
+      const statuses = services.length === 0 ? [] : await probeServices(services);
+      const breaches = [...evaluate(metrics, this.options.thresholds), ...evaluateServices(statuses)];
       const due = this.throttle.select(breaches);
 
       if (due.length > 0 && this.subscribers.size > 0) {

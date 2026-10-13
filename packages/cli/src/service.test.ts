@@ -7,14 +7,17 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import {
   isAlive,
+  logFilePath,
+  logFileSize,
   pidFilePath,
+  readLogSince,
   readLogTail,
   readPidRecord,
   removePidFile,
   serviceState,
   terminate,
-  writePidRecord,
   type PidRecord,
+  writePidRecord,
 } from './service';
 
 let cwd: string;
@@ -178,5 +181,58 @@ describe('readLogTail', () => {
     // Reads the file directly rather than shelling out to `tail`, which the
     // build guide does and which does not exist on Windows.
     assert.deepEqual(readLogTail(2, cwd), ['three', 'four']);
+  });
+});
+
+const NL = String.fromCharCode(10);
+
+describe('log follow mode (build guide Day 11-12: streaming logs)', () => {
+  function appendLog(text: string): void {
+    const file = logFilePath(cwd);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, text, 'utf-8');
+  }
+
+  it('returns nothing when the log has not grown', () => {
+    appendLog('first' + NL);
+    const offset = logFileSize(cwd);
+
+    assert.deepEqual(readLogSince(offset, cwd), { lines: [], offset });
+  });
+
+  it('returns only the lines appended since the offset', () => {
+    appendLog('old' + NL);
+    const offset = logFileSize(cwd);
+    appendLog('new one' + NL + 'new two' + NL);
+
+    const result = readLogSince(offset, cwd);
+
+    assert.deepEqual(result.lines, ['new one', 'new two']);
+    assert.equal(result.offset, logFileSize(cwd));
+  });
+
+  it('holds back a partial line until its newline arrives', () => {
+    appendLog('done' + NL);
+    const offset = logFileSize(cwd);
+    appendLog('half written');
+
+    const partial = readLogSince(offset, cwd);
+    assert.deepEqual(partial.lines, []);
+    assert.equal(partial.offset, offset);
+
+    appendLog(' now complete' + NL);
+    assert.deepEqual(readLogSince(partial.offset, cwd).lines, ['half written now complete']);
+  });
+
+  it('starts over when the file is rotated or truncated', () => {
+    appendLog('a lot of content' + NL);
+    const offset = logFileSize(cwd);
+    fs.writeFileSync(logFilePath(cwd), '', 'utf-8');
+
+    assert.deepEqual(readLogSince(offset, cwd), { lines: [], offset: 0 });
+  });
+
+  it('reports no lines and offset 0 when the log does not exist', () => {
+    assert.deepEqual(readLogSince(50, path.join(cwd, 'nowhere')), { lines: [], offset: 0 });
   });
 });

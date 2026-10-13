@@ -58,6 +58,10 @@ const BLOCKED_COMMAND_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\brd\s+\/s\b[^;]*[a-z]:\\?(?:\s|$)/i, 'recursively removes a drive'],
   [/Remove-Item[^;]*-Recurse[^;]*(?:-Force[^;]*)?[a-z]:\\(?:\s|$)/i, 'recursively deletes a drive'],
   [/\b(?:vssadmin|wbadmin)\b[^;]*\bdelete\b/i, 'deletes system backups'],
+  // The guide lists eval() as a blocked pattern; a model proposing eval( in a
+  // shell command is a hallucination worth stopping, not a shortcut. Built via
+  // new RegExp: literal escapes do not survive saving in this repo.
+  [new RegExp('(?:^|[^A-Za-z0-9_$])eval[ ]*[(]', 'i'), 'calls eval()'],
 ];
 
 /**

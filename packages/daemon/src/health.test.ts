@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import * as os from 'node:os';
+import * as net from 'node:net';
 import { describe, it } from 'node:test';
 
 import {
@@ -9,7 +10,9 @@ import {
   collectMetrics,
   diskUsagePercent,
   evaluate,
+  evaluateServices,
   memoryUsagePercent,
+  probeService,
   sampleCpuPercent,
   type HealthAlert,
   type HealthMetrics,
@@ -253,5 +256,73 @@ describe('HealthMonitor lifecycle', () => {
     assert.ok(alerts.length > 0);
     assert.equal(notified.length, 0, 'snapshot must not push alerts');
     monitor.stop();
+  });
+});
+
+describe('service liveness (build guide Day 19: "or key service is down")', () => {
+  it('reports a TCP port with nothing listening as down', async () => {
+    // Port 1 on loopback: nothing legitimate listens there.
+    const status = await probeService({ name: 'ghost', port: 1 }, 1_500);
+
+    assert.equal(status.name, 'ghost');
+    assert.equal(status.up, false);
+    assert.ok(status.detail.length > 0);
+  });
+
+  it('reports a port that IS listening as up', async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as net.AddressInfo).port;
+
+    try {
+      const status = await probeService({ name: 'local', port }, 1_500);
+      assert.equal(status.up, true);
+      assert.match(status.detail, /open/);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('treats a target with neither url nor port as down, not as a crash', async () => {
+    const status = await probeService({ name: 'misconfigured' }, 500);
+    assert.equal(status.up, false);
+    assert.match(status.detail, /no url or port/);
+  });
+
+  it('raises one alert per down service and none for healthy ones', () => {
+    const alerts = evaluateServices([
+      { name: 'api', up: false, detail: 'ECONNREFUSED' },
+      { name: 'web', up: true, detail: 'HTTP 200' },
+      { name: 'worker', up: false, detail: 'timed out' },
+    ]);
+
+    assert.deepEqual(
+      alerts.map((alert) => alert.metric),
+      ['service:api', 'service:worker'],
+    );
+    assert.match(String(alerts[0]?.message), /api is DOWN \(ECONNREFUSED\)/);
+  });
+
+  it('cools down per service, and a recovered service alerts again at once', () => {
+    const throttle = new AlertThrottle(3600);
+    const down = evaluateServices([{ name: 'api', up: false, detail: 'ECONNREFUSED' }]);
+
+    assert.equal(throttle.select(down, 0).length, 1);
+    // Same service still down a minute later: suppressed.
+    assert.equal(throttle.select(down, 60_000).length, 0);
+    // Recovered (no alerts), which clears it...
+    assert.equal(throttle.select([], 120_000).length, 0);
+    // ...so the next failure reports immediately rather than waiting an hour.
+    assert.equal(throttle.select(down, 121_000).length, 1);
+  });
+
+  it('keeps a down service from suppressing a CPU alert', () => {
+    const throttle = new AlertThrottle(3600);
+    const mixed = [
+      ...evaluateServices([{ name: 'api', up: false, detail: 'down' }]),
+      { metric: 'cpu' as const, value: 95, threshold: 90, message: 'CPU at 95%' },
+    ];
+
+    assert.equal(throttle.select(mixed, 0).length, 2);
   });
 });

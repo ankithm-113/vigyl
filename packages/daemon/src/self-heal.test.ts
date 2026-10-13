@@ -89,6 +89,7 @@ function makeConfig(overrides: Partial<VigylConfig['self_heal']> = {}): VigylCon
       cpu_percent: 90,
       memory_percent: 90,
       disk_percent: 85,
+      services: [],
     },
     daemon: { log_level: 'error', log_retention_days: 7 },
   };

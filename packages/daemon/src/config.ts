@@ -149,6 +149,25 @@ export const VigylConfigSchema = z
         cpu_percent: z.number().min(1).max(100).default(90),
         memory_percent: z.number().min(1).max(100).default(90),
         disk_percent: z.number().min(1).max(100).default(85),
+        /**
+         * Services to alert on when they stop answering. Each needs a name and
+         * either a url or a port; nothing is checked by default.
+         */
+        services: z
+          .array(
+            z
+              .object({
+                name: z.string().min(1, 'needs a name'),
+                url: z.string().min(1).optional(),
+                port: z.number().int().min(1).max(65535).optional(),
+                host: z.string().min(1).optional(),
+              })
+              .strict()
+              .refine((service) => service.url !== undefined || service.port !== undefined, {
+                message: 'needs either a url or a port',
+              }),
+          )
+          .default([]),
       })
       .strict()
       .default({}),
@@ -424,6 +443,7 @@ export function getDefaultConfig(workspaceRoot: string): Record<string, unknown>
     self_heal: { enabled: true, max_retries: 3, context_lines: 80 },
     monitor: {
       enabled: true,
+      services: [],
       interval_seconds: 300,
       cooldown_seconds: 3600,
       cpu_percent: 90,

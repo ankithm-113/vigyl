@@ -157,6 +157,81 @@ export async function terminate(pid: number, graceMs = 5_000): Promise<boolean> 
   return !isAlive(pid);
 }
 
+/** Split on LF; CR is trimmed by the blank-line filter. */
+const NEWLINE = String.fromCharCode(10);
+
+/** Byte length of the log file, or 0 when it does not exist yet. */
+export function logFileSize(cwd: string = process.cwd()): number {
+  try {
+    return fs.statSync(logFilePath(cwd)).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Read whatever was appended past `offset`.
+ *
+ * Returns the new offset so the caller can poll. Handles the two things that
+ * break a naive implementation: the file being rotated or truncated (size goes
+ * backwards, so start over), and a read landing mid-line (hold the partial
+ * line back until its newline arrives).
+ */
+export function readLogSince(
+  offset: number,
+  cwd: string = process.cwd(),
+): { lines: string[]; offset: number } {
+  const file = logFilePath(cwd);
+  let size: number;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    return { lines: [], offset: 0 };
+  }
+
+  if (size < offset) return { lines: [], offset: 0 };
+  if (size === offset) return { lines: [], offset };
+
+  const handle = fs.openSync(file, 'r');
+  try {
+    const length = size - offset;
+    const buffer = Buffer.alloc(length);
+    const read = fs.readSync(handle, buffer, 0, length, offset);
+    const chunk = buffer.subarray(0, read).toString('utf-8');
+
+    const lastBreak = chunk.lastIndexOf(String.fromCharCode(10));
+    if (lastBreak === -1) return { lines: [], offset };
+
+    const complete = chunk.slice(0, lastBreak);
+    const lines = complete.split(NEWLINE).filter((line) => line.trim() !== '');
+    return { lines, offset: offset + Buffer.byteLength(complete, 'utf-8') + 1 };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+/**
+ * Print appended log lines until the process is interrupted.
+ *
+ * Polling rather than fs.watch: watch semantics differ across platforms and
+ * miss appends on some network shares, and once a second is plenty for a log a
+ * human is reading.
+ */
+export function followLog(
+  write: (line: string) => void,
+  cwd: string = process.cwd(),
+  intervalMs = 1_000,
+): () => void {
+  let offset = logFileSize(cwd);
+  const tick = (): void => {
+    const next = readLogSince(offset, cwd);
+    offset = next.offset;
+    for (const line of next.lines) write(line);
+  };
+  const timer = setInterval(tick, Math.max(100, intervalMs));
+  return () => clearInterval(timer);
+}
+
 /** Read the tail of the daemon log without shelling out to `tail`. */
 export function readLogTail(lines: number, cwd: string = process.cwd()): string[] {
   const file = logFilePath(cwd);

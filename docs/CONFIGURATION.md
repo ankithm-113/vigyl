@@ -75,6 +75,33 @@ Unknown keys are an **error**, not silently ignored. A typo like
 `telegram_bot_token` at the top level tells you so, rather than starting a
 daemon with no token.
 
+## Service liveness alerts
+
+`monitor.services` is empty by default. Each entry needs a `name` and either a
+`url` or a `port`; unknown keys are rejected.
+
+```jsonc
+"monitor": {
+  "enabled": true,
+  "interval_seconds": 300,
+  "services": [
+    { "name": "api",    "url": "http://localhost:3000/health" },
+    { "name": "redis",  "port": 6379 },
+    { "name": "db",     "host": "10.0.0.5", "port": 5432 }
+  ]
+}
+```
+
+Checked on the same tick as CPU, memory and disk. A `url` counts as up on any
+response under 500 — the question is "is it alive", not "is this route right" —
+and 5xx alerts, because up-but-broken is worth knowing. A `port` counts as up if
+a TCP connection completes; `host` defaults to `127.0.0.1`. Each probe gives up
+after 5 seconds.
+
+Alerts are per service, so one dead service does not mute another, and a service
+that recovers clears its cooldown — the next failure reports immediately instead
+of waiting out `cooldown_seconds`.
+
 ## Environment variables
 
 | Variable | Overrides |

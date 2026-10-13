@@ -4,22 +4,24 @@ import { describe, it } from 'node:test';
 import {
   CALLBACK_APPROVE,
   CALLBACK_DENY,
+  CALLBACK_LOG,
+  DEFAULT_RETRY_POLICY,
+  PROGRESS_BAR_CELLS,
   TELEGRAM_MAX_MESSAGE,
   clampMessage,
+  createFloodControl,
   escapeHtml,
   explainStopReason,
   isAuthorized,
   parseCallbackData,
-  renderResult,
-  truncateOutput,
-  DEFAULT_RETRY_POLICY,
-  createFloodControl,
-  retryDecision,
-  stripHtml,
-  CALLBACK_LOG,
-  renderHistory,
+  progressBar,
   renderHealthAlert,
   renderHealthSnapshot,
+  renderHistory,
+  renderResult,
+  retryDecision,
+  stripHtml,
+  truncateOutput,
 } from './bot';
 import type { CommandResult } from './daemon';
 
@@ -566,5 +568,38 @@ describe('health rendering', () => {
       message: 'a fairly long alert message that repeats many times over',
     }));
     assert.ok(renderHealthAlert(many).length <= TELEGRAM_MAX_MESSAGE);
+  });
+});
+
+describe('progressBar (build guide Day 17: progress bar for long builds)', () => {
+  const FILLED = String.fromCharCode(0x25b0);
+  const EMPTY = String.fromCharCode(0x25b1);
+
+  it('is a fixed-width track with exactly one filled cell', () => {
+    const [track] = progressBar(0, 0).split(' ');
+
+    assert.equal(track?.length, PROGRESS_BAR_CELLS);
+    assert.equal(track?.split(FILLED).length, 2);
+    assert.equal(track?.split(EMPTY).length, PROGRESS_BAR_CELLS);
+  });
+
+  it('moves the filled cell with each frame and wraps around', () => {
+    const first = progressBar(0, 0).split(' ')[0] ?? '';
+    const second = progressBar(1, 0).split(' ')[0] ?? '';
+
+    assert.equal(first.indexOf(FILLED), 0);
+    assert.equal(second.indexOf(FILLED), 1);
+    assert.equal(progressBar(PROGRESS_BAR_CELLS, 0), progressBar(0, 0));
+  });
+
+  it('shows elapsed time as m:ss', () => {
+    assert.match(progressBar(0, 7_000), /0:07$/);
+    assert.match(progressBar(0, 95_000), /1:35$/);
+    assert.match(progressBar(0, 0), /0:00$/);
+  });
+
+  it('does not go backwards or crash on odd input', () => {
+    assert.match(progressBar(-3, -500), /0:00$/);
+    assert.equal((progressBar(-3, 0).split(' ')[0] ?? '').length, PROGRESS_BAR_CELLS);
   });
 });

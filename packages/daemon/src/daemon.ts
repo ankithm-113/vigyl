@@ -193,6 +193,7 @@ export class VigylDaemon {
         memoryPercent: config.monitor.memory_percent,
         diskPercent: config.monitor.disk_percent,
       },
+      services: config.monitor.services,
       // Indirection so the bot can register a sender after construction.
       notify: (chatIds, alerts) => this.onHealthAlert?.(chatIds, alerts),
     });
