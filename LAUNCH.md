@@ -15,7 +15,8 @@ needed except where a line says `← CHOOSE`.
 - [x] npm 2FA back on, publish tokens deleted
 - [x] demo GIF recorded and committed as `docs/demo.gif` (3.2 MB, 14s) — an `.mp4` of the same cut is better for X and Reddit
 - [ ] `npm i -g @vigylx/cli` run once on a machine that has never seen Vigyl
-- [ ] GIF attached to the release body (drag it in: Releases → v0.1.0 → Edit)
+- [x] GIF in the release body, release published as “Vigyl v0.1.0 — early beta”
+- [x] X thread posted 2026-10-13 — next: HN a day later, Reddit a day after that
 
 **Rule for every channel:** say it is an early beta tested by one person. The
 honesty is the pitch. People can tell the difference between "I shipped a thing"
