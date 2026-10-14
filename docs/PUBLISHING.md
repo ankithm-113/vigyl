@@ -3,6 +3,27 @@
 Releases are published by GitHub Actions, not from a laptop. There is no
 `NPM_TOKEN` in this repository and there should never be one.
 
+## Right now, for v0.2.0
+
+The tag `v0.2.0` exists locally at `be91f41` and has **not** been pushed.
+Pushing it runs the workflow, which will publish `@vigylx/daemon` and then stop
+at `@vigylx/slm` with a 404, because that package has never existed and npm has
+no trusted publisher for it.
+
+So do the one-time setup below **first**, then push the tag. In order:
+
+1. add an authenticator app to the npm account
+2. `npm login`, then publish all four by hand (`daemon`, `slm`, `mcp-servers`,
+   `cli` — in that order)
+3. configure the trusted publisher on each of the four packages
+4. `git push origin v0.2.0` — the workflow then finds everything already
+   published, skips it, and confirms the versions line up
+5. check it from a machine that has never seen Vigyl:
+   `npm i -g @vigylx/cli && vigyl --version` should print `0.2.0`
+
+Step 5 is not a formality. v0.1.0's clean-install check found two packaging
+bugs in thirty seconds.
+
 ## Why it works this way
 
 v0.1.0 went out with a bypass-2FA token, because the npm account's second
@@ -91,6 +112,18 @@ Run the workflow by hand with **Dry run** ticked
 (Actions → Publish → Run workflow). It does everything except publish, including
 `npm publish --dry-run` for each package so you can read the tarball contents.
 No credentials are involved.
+
+## After publishing, always
+
+```bash
+npm view @vigylx/cli version          # should be the version you tagged
+npm i -g @vigylx/cli && vigyl doctor  # on a machine that has never had it
+```
+
+An install from a different machine is the only check that catches a missing
+dependency, a file left out of `files`, or a cross-reference pointing at a
+version that does not exist. A published version cannot be replaced, so this is
+cheaper before anyone else tries it.
 
 ## When it fails
 
