@@ -361,6 +361,35 @@ export async function addDevice(
   return device;
 }
 
+/** Devices on file, newest last, without their secrets. */
+export function listDevices(workspaceRoot: string): Array<Omit<AuthorizedDevice, 'secret'>> {
+  return [...loadDevices(workspaceRoot).values()].map(({ deviceId, label }) => ({
+    deviceId,
+    ...(label === undefined ? {} : { label }),
+  }));
+}
+
+/**
+ * Remove a device.
+ *
+ * Returns false when it was not there, so a caller can say "no such device"
+ * rather than reporting a revocation that did not happen. An existing
+ * connection is not torn down by this: the daemon drops it at the next
+ * reconnect, which is the honest thing to tell the operator.
+ */
+export async function revokeDevice(workspaceRoot: string, deviceId: string): Promise<boolean> {
+  const devices = loadDevices(workspaceRoot);
+  if (!devices.delete(deviceId)) return false;
+
+  const file = devicesPath(workspaceRoot);
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, JSON.stringify([...devices.values()], null, 2), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // The server
 // ---------------------------------------------------------------------------

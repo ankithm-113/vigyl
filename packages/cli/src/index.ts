@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { VERSION, loadDotenv } from '@vigylx/daemon';
+import { deviceAdd, deviceList, deviceRevoke } from './commands/device';
 import { doctor } from './commands/doctor';
 import { init } from './commands/init';
 import { start } from './commands/start';
@@ -96,6 +97,35 @@ program
     };
     process.on('SIGINT', finish);
     process.on('SIGTERM', finish);
+  });
+
+// `vigyl device ...` — secrets an app uses to connect over WebSocket. A device
+// secret is equivalent to a shell on this machine.
+const device = program
+  .command('device')
+  .description('Manage devices authorised to connect over WebSocket');
+
+device
+  .command('add')
+  .description('Create a device id and secret (the secret is shown once)')
+  .argument('[label]', 'a name to recognise it by, e.g. "my phone"')
+  .action(async (label?: string) => {
+    finish(await deviceAdd(label));
+  });
+
+device
+  .command('list')
+  .description('Show authorised devices (ids only, never secrets)')
+  .action(() => {
+    finish(deviceList());
+  });
+
+device
+  .command('revoke')
+  .description('Remove a device')
+  .argument('<deviceId>', 'the id from `vigyl device list`')
+  .action(async (deviceId: string) => {
+    finish(await deviceRevoke(deviceId));
   });
 
 // `vigyl slm ...` — the local model that classifies failures without a cloud

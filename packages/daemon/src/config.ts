@@ -138,6 +138,23 @@ export const VigylConfigSchema = z
      * should not try to start one. Each entry is a command the daemon spawns
      * and speaks MCP to over stdio.
      */
+    /**
+     * The WebSocket interface the Month 3 app will use.
+     *
+     * Off by default, and bound to loopback when on: a daemon that runs shell
+     * commands should not start listening because a field was left unset.
+     * Turning it on with no authorized devices refuses every connection, which
+     * is the right failure.
+     */
+    ws: z
+      .object({
+        enabled: z.boolean().default(false),
+        port: z.number().int().min(1).max(65535).default(8472),
+        host: z.string().min(1).default('127.0.0.1'),
+      })
+      .strict()
+      .default({}),
+
     mcp_servers: z
       .array(
         z
@@ -464,6 +481,7 @@ export function getDefaultConfig(workspaceRoot: string): Record<string, unknown>
       timeout_seconds: 300,
     },
     mcp_servers: [],
+    ws: { enabled: false, port: 8472, host: '127.0.0.1' },
     self_heal: { enabled: true, max_retries: 3, context_lines: 80 },
     monitor: {
       enabled: true,

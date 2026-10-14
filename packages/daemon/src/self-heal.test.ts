@@ -81,6 +81,7 @@ function makeConfig(overrides: Partial<VigylConfig['self_heal']> = {}): VigylCon
     provider: 'anthropic',
     anthropic: { api_key: 'sk-ant-test', model: 'claude-haiku-4-5' },
     mcp_servers: [],
+    ws: { enabled: false, port: 8472, host: '127.0.0.1' },
     hitl: { require_for: ['production'], timeout_seconds: 300 },
     self_heal: { enabled: true, max_retries: 3, context_lines: 80, ...overrides },
     monitor: {
