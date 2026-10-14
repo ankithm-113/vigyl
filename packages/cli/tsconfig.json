@@ -18,6 +18,9 @@
   "references": [
     {
       "path": "../daemon"
+    },
+    {
+      "path": "../slm"
     }
   ]
 }

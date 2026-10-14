@@ -6,6 +6,7 @@ import { doctor } from './commands/doctor';
 import { init } from './commands/init';
 import { start } from './commands/start';
 import { status } from './commands/status';
+import { slmDownload, slmStatus } from './commands/slm';
 import { stop } from './commands/stop';
 import { followLog, logFilePath, readLogTail } from './service';
 
@@ -95,6 +96,28 @@ program
     };
     process.on('SIGINT', finish);
     process.on('SIGTERM', finish);
+  });
+
+// `vigyl slm ...` — the local model that classifies failures without a cloud
+// call. Month 2 week 1; nothing depends on it yet.
+const slm = program
+  .command('slm')
+  .description('Manage the local classification model');
+
+slm
+  .command('download')
+  .description('Download a GGUF model into ~/.vigyl/models (resumable)')
+  .option('-m, --model <key>', 'which model to fetch')
+  .option('--force', 'download again even if the model is already there')
+  .action(async (options: { model?: string; force?: boolean }) => {
+    finish(await slmDownload(options));
+  });
+
+slm
+  .command('status')
+  .description('Show which local models are downloaded')
+  .action(async () => {
+    finish(await slmStatus());
   });
 
 program
