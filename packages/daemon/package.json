@@ -21,15 +21,17 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
+    "@types/ws": "^8.18.2",
     "dotenv": "^16.4.5",
     "grammy": "^1.45.1",
     "openai": "^7.20.0",
     "winston": "^3.13.0",
+    "ws": "^8.22.0",
     "zod": "^3.25.0"
   },
   "optionalDependencies": {
-    "node-pty": "^1.0.0",
-    "@modelcontextprotocol/sdk": "^1.21.0"
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "node-pty": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

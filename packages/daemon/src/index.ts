@@ -195,6 +195,27 @@ export {
 } from './mcp-guy';
 
 export {
+  DEFAULT_WS_PORT,
+  KEEPALIVE_INTERVAL_MS,
+  MAX_MESSAGE_BYTES,
+  NonceCache,
+  SIGNATURE_WINDOW_MS,
+  VigylWebSocketServer,
+  addDevice,
+  authenticate,
+  devicesPath,
+  loadDevices,
+  parseClientMessage,
+  parseDevices,
+  sign,
+  toEvent,
+  type AuthorizedDevice,
+  type ClientMessage,
+  type ServerEvent,
+  type WsServerOptions,
+} from './ws-server';
+
+export {
   SecurityError,
   SecurityLayer,
   isContained,
