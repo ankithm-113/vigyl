@@ -1,0 +1,64 @@
+{
+  "name": "@vigylx/mcp-servers",
+  "version": "0.1.0",
+  "description": "MCP servers that let Vigyl answer questions about your cloud services: Firebase, GitHub and SQL databases.",
+  "license": "AGPL-3.0-only",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "vigyl-mcp-firebase": "dist/firebase/index.js",
+    "vigyl-mcp-github": "dist/github/index.js",
+    "vigyl-mcp-database": "dist/database/index.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
+    "clean": "node -e \"for (const p of ['dist','test-dist']) require('fs').rmSync(p,{recursive:true,force:true}); require('fs').rmSync('tsconfig.tsbuildinfo',{force:true})\"",
+    "test": "tsc -p tsconfig.test.json && node --test --test-force-exit \"test-dist/**/*.test.js\"",
+    "prepack": "node -e \"for (const f of ['README.md','LICENSE']) require('fs').copyFileSync('../../'+f, f)\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "zod": "^3.25.0"
+  },
+  "optionalDependencies": {
+    "@octokit/rest": "^22.0.0",
+    "firebase-admin": "^13.6.0",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.15.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "vigyl",
+    "mcp",
+    "firebase",
+    "github",
+    "postgres"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ankithm-113/vigyl.git",
+    "directory": "packages/mcp-servers"
+  },
+  "homepage": "https://github.com/ankithm-113/vigyl#readme",
+  "bugs": {
+    "url": "https://github.com/ankithm-113/vigyl/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Ankith M"
+}
