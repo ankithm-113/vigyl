@@ -21,7 +21,7 @@
     "dev": "tsc -b --watch",
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
     "clean": "node -e \"for (const p of ['dist','test-dist']) require('fs').rmSync(p,{recursive:true,force:true}); require('fs').rmSync('tsconfig.tsbuildinfo',{force:true})\"",
-    "test": "tsc -p tsconfig.test.json && node --test --test-force-exit \"test-dist/**/*.test.js\"",
+    "test": "tsc -p tsconfig.test.json && node -r dotenv/config --test --test-force-exit \"test-dist/**/*.test.js\"",
     "prepack": "node -e \"for (const f of ['README.md','LICENSE']) require('fs').copyFileSync('../../'+f, f)\""
   },
   "dependencies": {
@@ -36,7 +36,8 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/pg": "^8.15.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "dotenv": "^16.4.5"
   },
   "engines": {
     "node": ">=20"
