@@ -100,6 +100,35 @@ export function trimForModel(logOutput: string, maxLines = DEFAULT_MAX_LINES): s
     .join(newline);
 }
 
+/**
+ * What each label means.
+ *
+ * Without these a small model puts almost everything in `build_error`, because
+ * every one of these failures did happen during a build. Measured: Llama 3.2 1B
+ * and Qwen2.5 1.5B both answered `build_error` for 7 of 11 cases, at 0.9
+ * confidence, while writing summaries that showed they had understood the error
+ * correctly. The labels were the problem, not the comprehension.
+ */
+const TYPE_GUIDE: readonly string[] = [
+  'dependency_missing: a package, module, library or shared object is absent,',
+  '  not installed, or cannot be loaded. Includes a module that exists but',
+  '  whose own dependency is missing.',
+  'config_error: the code is fine but something is set wrong or absent in',
+  '  configuration or environment - a missing env var, an unknown setting, a',
+  '  database or resource that was never created, a wrong runtime version.',
+  'permission_error: denied access to a file, directory, port or resource.',
+  'network_error: could not reach something over the network - refused,',
+  '  timed out, DNS, unreachable host.',
+  'syntax_error: the source or a config file could not be parsed at all.',
+  'build_error: the code parsed but the compiler or type checker rejected it -',
+  '  type errors, borrow errors, unused variables, failed compilation. Use this',
+  '  only when a compiler is rejecting the code itself.',
+  'test_failure: a test ran and did not pass - a failed assertion, a snapshot',
+  '  mismatch, a test timeout.',
+  'unknown: the output does not show one of the above. Resource exhaustion',
+  '  (out of memory, out of disk) is unknown, not build_error.',
+];
+
 export function buildPrompt(logOutput: string): string {
   const newline = String.fromCharCode(10);
   const fence = '---';
@@ -114,11 +143,16 @@ export function buildPrompt(logOutput: string): string {
     logOutput,
     fence,
     '',
-    'errorType must be the single best fit. confidence is how sure you are,',
-    '0 to 1, and should be below 0.5 when the output does not clearly show a',
-    'cause. summary is one sentence under 120 characters saying what went',
-    'wrong. suggestedFix is one actionable sentence, omitted if you do not',
-    'have one.',
+    'Choose errorType by what CAUSED the failure, not by what was running when',
+    'it happened. Almost everything here happens during a build, so do not',
+    'default to build_error.',
+    '',
+    ...TYPE_GUIDE,
+    '',
+    'confidence is how sure you are, 0 to 1, and must be below 0.5 when the',
+    'output does not clearly show a cause. summary is one sentence under 120',
+    'characters saying what went wrong. suggestedFix is one actionable',
+    'sentence, omitted if you do not have one.',
   ].join(newline);
 }
 
@@ -170,6 +204,17 @@ export interface ClassifierOptions {
 const DEFAULT_CONTEXT_SIZE = 4096;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Context sizes to try, largest first.
+ *
+ * llama.cpp refuses a context it cannot fit in memory, and on a laptop with
+ * other things running that is a moving target: Phi-3 Q4 needs ~2.4 GB for
+ * weights before any context at all, and an 8 GB machine often has less than
+ * that free. Failing outright would make the SLM unusable on exactly the
+ * machines it is meant to save money on, so it negotiates down instead.
+ */
+const CONTEXT_FALLBACKS = [4096, 2048, 1024, 512] as const;
+
 export class SLMClassifier {
   private session: PromptSession | null = null;
   private grammar: unknown;
@@ -181,6 +226,9 @@ export class SLMClassifier {
    * overlapping prompts interleave into nonsense.
    */
   private queue: Promise<unknown> = Promise.resolve();
+
+  /** What the model actually got, which may be less than was asked for. */
+  private contextSize = 0;
 
   constructor(options: ClassifierOptions) {
     this.options = {
@@ -194,6 +242,11 @@ export class SLMClassifier {
 
   get ready(): boolean {
     return this.session !== null;
+  }
+
+  /** The context size in use, once loaded. 0 before init. */
+  get loadedContextSize(): number {
+    return this.contextSize;
   }
 
   /**
@@ -211,6 +264,7 @@ export class SLMClassifier {
       const made = await this.options.createSession(this.options.modelPath);
       this.session = made.session;
       this.grammar = made.grammar;
+      this.contextSize = this.options.contextSize;
       return;
     }
 
@@ -231,7 +285,27 @@ export class SLMClassifier {
 
     const llama = await getLlama();
     const model = await llama.loadModel({ modelPath: this.options.modelPath });
-    const context = await model.createContext({ contextSize: this.options.contextSize });
+
+    const wanted = this.options.contextSize;
+    const candidates = [wanted, ...CONTEXT_FALLBACKS.filter((size) => size < wanted)];
+
+    let context: { getSequence(): unknown } | undefined;
+    let lastError: unknown;
+    for (const contextSize of candidates) {
+      try {
+        context = await model.createContext({ contextSize });
+        this.contextSize = contextSize;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!context) {
+      throw new Error(
+        `Could not fit a context for ${this.options.modelPath} in available memory ` +
+          `(tried ${candidates.join(', ')}). ${String(lastError)}`,
+      );
+    }
 
     this.grammar = await llama.createGrammarForJsonSchema(CLASSIFICATION_SCHEMA);
     this.session = new LlamaChatSession({ contextSequence: context.getSequence() });
@@ -240,6 +314,7 @@ export class SLMClassifier {
   async dispose(): Promise<void> {
     await this.session?.dispose?.();
     this.session = null;
+    this.contextSize = 0;
   }
 
   /**
