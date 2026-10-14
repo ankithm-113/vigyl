@@ -24,7 +24,8 @@ import type { Context } from 'grammy';
 import { logger } from './logger';
 import type { HealthAlert, HealthMetrics } from './health';
 import type { HistoryEntry } from './history';
-import type { CommandResult } from './daemon';
+import type { CommandResult, DaemonStats, DaemonStatus } from './daemon';
+import type { McpTool } from './mcp-guy';
 import type { VigylDaemon } from './daemon';
 import type { StopReason } from './self-heal';
 import type { VigylConfig } from './config';
@@ -108,6 +109,99 @@ export function isAuthorized(chatId: number | undefined, allowed: readonly numbe
 export interface RenderedMessage {
   text: string;
   keyboard?: InlineKeyboard;
+}
+
+/** `3d 14h`, `2h 5m`, `47s`. */
+export function formatUptime(ms: number): string {
+  if (ms < 1000) return '0s';
+  const seconds = Math.floor(ms / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
+}
+
+/**
+ * `/mcp` — which services are connected and what they can be asked.
+ *
+ * Marks the tools that need approval, because the honest answer to "what can
+ * this thing do" includes "and these ones will ask you first".
+ */
+export function renderMcp(servers: readonly string[], tools: readonly McpTool[]): string {
+  const nl = String.fromCharCode(10);
+  if (servers.length === 0) {
+    return [
+      '🔌 <b>No services connected</b>',
+      '',
+      'Add them under <code>mcp_servers</code> in vigyl.config.json',
+      'to ask about Firebase, GitHub or your database from here.',
+    ].join(nl);
+  }
+
+  const lines = [`🔌 <b>${servers.length} service(s) connected</b>`, ''];
+
+  for (const server of servers) {
+    const owned = tools.filter((tool) => tool.serverId === server);
+    lines.push(`<b>${escapeHtml(server)}</b> — ${owned.length} tool(s)`);
+    for (const tool of owned) {
+      const gate = tool.readOnly ? '' : ' 🔒';
+      lines.push(`  <code>${escapeHtml(tool.name)}</code>${gate}`);
+    }
+    lines.push('');
+  }
+
+  if (tools.some((tool) => !tool.readOnly)) {
+    lines.push('🔒 asks for your approval before it runs.');
+  }
+  return lines.join(nl).trimEnd();
+}
+
+/** `/stats` — what this process has done since it started. */
+export function renderStats(stats: DaemonStats, status: DaemonStatus): string {
+  const nl = String.fromCharCode(10);
+  const lines = [
+    '📊 <b>Vigyl stats</b>',
+    `Uptime: ${formatUptime(stats.uptimeMs)}`,
+    `Commands: ${stats.commandsRun}`,
+  ];
+
+  if (stats.selfHealAttempts > 0) {
+    lines.push(
+      `Self-heals: ${stats.selfHealAttempts} (${stats.selfHealSucceeded} succeeded)`,
+    );
+  }
+
+  if (stats.approvalsRequested > 0) {
+    lines.push(
+      `Approvals: ${stats.approvalsRequested} asked · ` +
+        `${stats.approvalsGranted} granted · ${stats.approvalsDenied} denied`,
+    );
+  }
+
+  if (stats.toolCalls > 0) {
+    const perServer = Object.entries(stats.toolsByServer)
+      .map(([server, count]) => `${escapeHtml(server)}: ${count}`)
+      .join(' · ');
+    const failures = stats.toolErrors > 0 ? ` (${stats.toolErrors} failed)` : '';
+    lines.push(`Service calls: ${stats.toolCalls}${failures}`);
+    if (perServer !== '') lines.push(`  ${perServer}`);
+  } else if (status.mcpServers.length > 0) {
+    lines.push('Service calls: none yet');
+  }
+
+  if (status.pendingApprovals > 0) {
+    lines.push(`${status.pendingApprovals} approval(s) waiting.`);
+  }
+
+  // Counters live in this process, so a restart resets them. Said once rather
+  // than leaving someone to wonder why the number went backwards.
+  lines.push('');
+  lines.push('<i>Counted since the daemon last started.</i>');
+  return lines.join(nl);
 }
 
 /** Turn a CommandResult into what the user sees. Pure; no Telegram calls. */
@@ -607,6 +701,18 @@ export class TelegramInterface {
       await ctx.reply(HELP, { parse_mode: 'HTML' });
     });
 
+    this.bot.command('mcp', async (ctx) => {
+      await ctx.reply(renderMcp(this.daemon.mcpServers, this.daemon.mcpTools), {
+        parse_mode: 'HTML',
+      });
+    });
+
+    this.bot.command('stats', async (ctx) => {
+      await ctx.reply(renderStats(this.daemon.stats, this.daemon.status), {
+        parse_mode: 'HTML',
+      });
+    });
+
     this.bot.command('status', async (ctx) => {
       const status = this.daemon.status;
       const lines = [
@@ -941,6 +1047,8 @@ Send a command in plain English:
 • "run the test suite"
 • "deploy to staging"
 
+/mcp — connected services and what they can answer
+/stats — what this daemon has done since it started
 /status — daemon status
 /help — command reference`;
 

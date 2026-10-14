@@ -26,6 +26,7 @@ import * as path from 'path';
 import { ApprovalStore, approvalReasons, type ApprovalOwner } from './hitl';
 import {
   McpHub,
+  type McpTool,
   describeTools,
   mightNeedTool,
   parseToolChoice,
@@ -134,6 +135,27 @@ export type CommandResult =
   | BusyResult
   | ErrorResult;
 
+/**
+ * What the daemon has done since it started.
+ *
+ * Counted rather than derived from history, because history is per-chat and
+ * trimmed, and "how many self-heals has this process done" is a question about
+ * the process. Reset when the daemon restarts, which the uptime makes obvious.
+ */
+export interface DaemonStats {
+  commandsRun: number;
+  toolCalls: number;
+  toolErrors: number;
+  /** Per MCP server, so a noisy or broken one is visible. */
+  toolsByServer: Record<string, number>;
+  selfHealAttempts: number;
+  selfHealSucceeded: number;
+  approvalsRequested: number;
+  approvalsGranted: number;
+  approvalsDenied: number;
+  uptimeMs: number;
+}
+
 export interface DaemonStatus {
   running: boolean;
   busy: boolean;
@@ -185,6 +207,17 @@ export class VigylDaemon {
    */
   private readonly toolApprovals: ApprovalStore<McpToolCall>;
   private readonly mcp: McpHub;
+  private readonly counts = {
+    commandsRun: 0,
+    toolCalls: 0,
+    toolErrors: 0,
+    toolsByServer: {} as Record<string, number>,
+    selfHealAttempts: 0,
+    selfHealSucceeded: 0,
+    approvalsRequested: 0,
+    approvalsGranted: 0,
+    approvalsDenied: 0,
+  };
   private readonly sessions = new SessionStore();
   private readonly logs: CommandLogStore;
   private readonly commands: HistoryStore;
@@ -353,6 +386,7 @@ export class VigylDaemon {
       return this.requestApproval(parsed, reasons, options.owner);
     }
 
+    this.counts.commandsRun += 1;
     const result = await this.execute(parsed, onProgress);
     this.remember(options.owner, userMessage, result);
     return result;
@@ -397,6 +431,7 @@ export class VigylDaemon {
     // Nothing the model said about its request is consulted here.
     const gate = toolGate(this.mcp.findTool(call.tool), call, this.config.hitl.require_for);
     if (gate.needsApproval) {
+      this.counts.approvalsRequested += 1;
       const approval = this.toolApprovals.create(call, gate.reasons, options.owner);
       return {
         status: 'approval_required',
@@ -417,8 +452,11 @@ export class VigylDaemon {
 
   /** Call a tool that has already been allowed. */
   private async runTool(call: McpToolCall): Promise<ToolCallResult> {
+    this.counts.toolCalls += 1;
+    this.counts.toolsByServer[call.serverId] = (this.counts.toolsByServer[call.serverId] ?? 0) + 1;
     try {
       const raw = await this.mcp.callTool(call.tool, call.args);
+      if (raw.isError === true) this.counts.toolErrors += 1;
       return {
         status: 'tool_result',
         tool: call.tool,
@@ -427,6 +465,7 @@ export class VigylDaemon {
         isError: raw.isError === true,
       };
     } catch (err) {
+      this.counts.toolErrors += 1;
       logger.warn('Tool call failed', { tool: call.tool, reason: String(err) });
       return {
         status: 'tool_result',
@@ -438,11 +477,30 @@ export class VigylDaemon {
     }
   }
 
+  /** A snapshot for `/stats`. */
+  get stats(): DaemonStats {
+    return {
+      ...this.counts,
+      toolsByServer: { ...this.counts.toolsByServer },
+      uptimeMs: this.startedAt === undefined ? 0 : Date.now() - this.startedAt,
+    };
+  }
+
+  /** The MCP tools on offer, for `/mcp`. */
+  get mcpTools(): readonly McpTool[] {
+    return this.mcp.getToolManifest();
+  }
+
+  get mcpServers(): readonly string[] {
+    return this.mcp.connectedServers;
+  }
+
   private requestApproval(
     parsed: ParsedCommand,
     reasons: string[],
     owner: ApprovalOwner | undefined,
   ): ApprovalRequiredResult {
+    this.counts.approvalsRequested += 1;
     const approval = this.approvals.create(parsed, reasons, owner);
     return {
       status: 'approval_required',
@@ -476,6 +534,7 @@ export class VigylDaemon {
     // production" can never be claimed as a tool call or the reverse.
     const toolClaim = this.toolApprovals.claim(approvalId, options.owner);
     if (toolClaim.ok) {
+      this.counts.approvalsGranted += 1;
       const call = toolClaim.approval.subject;
       onProgress(`📋 ${call.description}`);
       const toolResult = await this.runTool(call);
@@ -492,6 +551,7 @@ export class VigylDaemon {
       return { status: 'rejected', reason: explainClaimFailure(failure) };
     }
 
+    this.counts.approvalsGranted += 1;
     const result = await this.execute(claim.approval.subject, onProgress);
     this.remember(options.owner, claim.approval.subject.description, result);
     return result;
@@ -502,6 +562,7 @@ export class VigylDaemon {
     // Either store may hold it; denying is the same either way.
     const deniedTool = this.toolApprovals.deny(approvalId, options.owner);
     const deniedCommand = this.approvals.deny(approvalId, options.owner);
+    if (deniedTool || deniedCommand) this.counts.approvalsDenied += 1;
     return deniedTool || deniedCommand;
   }
 
@@ -649,6 +710,12 @@ export class VigylDaemon {
   private async execute(parsed: ParsedCommand, onProgress: ProgressReporter): Promise<CommandResult> {
     try {
       const heal = await this.selfHeal.runWithHealing(parsed.command, onProgress);
+
+      // attempts > 1 means a patch was written and the command re-run.
+      if (heal.attempts > 1) {
+        this.counts.selfHealAttempts += 1;
+        if (heal.success) this.counts.selfHealSucceeded += 1;
+      }
 
       const commandId = this.logs.write(heal.output, {
         command: parsed.command,
