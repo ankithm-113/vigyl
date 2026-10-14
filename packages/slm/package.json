@@ -19,7 +19,9 @@
     "test": "tsc -p tsconfig.test.json && node --test --test-force-exit \"test-dist/**/*.test.js\"",
     "prepack": "node -e \"for (const f of ['README.md','LICENSE']) require('fs').copyFileSync('../../'+f, f)\""
   },
-  "dependencies": {},
+  "dependencies": {
+    "@vigylx/daemon": "^0.1.0"
+  },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0"
@@ -46,5 +48,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "author": "Ankith M"
+  "author": "Ankith M",
+  "optionalDependencies": {
+    "node-llama-cpp": "^3.22.0"
+  }
 }

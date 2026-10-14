@@ -19,3 +19,21 @@ export {
 export type { DownloadOptions, DownloadProgress, ModelSpec, SpaceCheck } from './downloader';
 
 export { createTerminalProgress, renderDownloadBar } from './progress';
+
+export {
+  CLASSIFICATION_SCHEMA,
+  DEFAULT_CONFIDENCE_THRESHOLD,
+  DEFAULT_MAX_LINES,
+  ERROR_TYPES,
+  SLMClassifier,
+  buildPrompt,
+  fastClassify,
+  trimForModel,
+} from './classifier';
+export type {
+  ClassificationResult,
+  ClassificationSource,
+  ClassifierOptions,
+  ErrorType,
+  PromptSession,
+} from './classifier';
