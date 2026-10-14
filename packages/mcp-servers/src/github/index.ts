@@ -30,7 +30,7 @@ import {
 } from './repo';
 
 const SERVER_NAME = 'vigyl-github';
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 /** What a tool hands back. See the Firebase server for why this is not inferred. */
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };

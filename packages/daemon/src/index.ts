@@ -18,7 +18,7 @@
  *   Day 8  hitl.ts      — approval gate with expiry             [done]
  */
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 export {
   CONFIG_FILENAME,

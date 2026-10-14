@@ -47,7 +47,7 @@ import { Supervisor, SupervisorError, type ParsedCommand } from './supervisor';
 import type { ErrorType } from './monitor';
 import { resolveLlm, type VigylConfig } from './config';
 
-export const DAEMON_VERSION = '0.1.0';
+export const DAEMON_VERSION = '0.2.0';
 
 export type CommandStatus =
   | 'completed'

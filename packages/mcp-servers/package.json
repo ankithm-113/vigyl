@@ -1,6 +1,6 @@
 {
   "name": "@vigylx/mcp-servers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP servers that let Vigyl answer questions about your cloud services: Firebase, GitHub and SQL databases.",
   "license": "AGPL-3.0-only",
   "main": "dist/index.js",

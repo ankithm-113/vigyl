@@ -31,7 +31,7 @@ import {
 } from './sql';
 
 const SERVER_NAME = 'vigyl-database';
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
 

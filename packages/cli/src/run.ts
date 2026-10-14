@@ -69,7 +69,7 @@ export async function runForeground(cwd: string = process.cwd()): Promise<number
       pid: process.pid,
       startedAt: Date.now(),
       workspaceRoot: config.workspace_root,
-      version: '0.1.0',
+      version: '0.2.0',
     },
     cwd,
   );

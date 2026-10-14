@@ -1,6 +1,6 @@
 {
   "name": "@vigylx/slm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Vigyl local inference service: classifies build failures on-device so the cloud model is only asked when it is actually needed.",
   "license": "AGPL-3.0-only",
   "main": "dist/index.js",
@@ -20,7 +20,7 @@
     "prepack": "node -e \"for (const f of ['README.md','LICENSE']) require('fs').copyFileSync('../../'+f, f)\""
   },
   "dependencies": {
-    "@vigylx/daemon": "^0.1.0"
+    "@vigylx/daemon": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

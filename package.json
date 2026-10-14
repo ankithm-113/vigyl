@@ -1,8 +1,8 @@
 {
   "name": "vigyl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Vigyl — your infrastructure, in your pocket.",
+  "description": "Vigyl \u2014 your infrastructure, in your pocket.",
   "packageManager": "npm@11.6.4",
   "workspaces": [
     "packages/*"

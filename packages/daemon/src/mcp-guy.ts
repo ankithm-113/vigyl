@@ -434,7 +434,7 @@ async function defaultClientFactory(config: McpServerConfig): Promise<McpClientL
     stderr: 'pipe',
   });
 
-  const client = new Client({ name: 'vigyl-daemon', version: '0.1.0' }, { capabilities: {} });
+  const client = new Client({ name: 'vigyl-daemon', version: '0.2.0' }, { capabilities: {} });
   await client.connect(transport);
   return client;
 }

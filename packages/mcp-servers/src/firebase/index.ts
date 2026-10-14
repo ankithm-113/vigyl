@@ -31,7 +31,7 @@ type Firestore = import('firebase-admin/firestore').Firestore;
 type Auth = import('firebase-admin/auth').Auth;
 
 const SERVER_NAME = 'vigyl-firebase';
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 /** Where the operator is, for anything that means "today". */
 const DEFAULT_TIME_ZONE = process.env.VIGYL_TIMEZONE?.trim() || 'UTC';
