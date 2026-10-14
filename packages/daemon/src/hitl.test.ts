@@ -109,7 +109,7 @@ describe('ApprovalStore', () => {
 
     assert.equal(claim.ok, true);
     if (!claim.ok) throw new Error('narrowing');
-    assert.equal(claim.approval.parsed.command, 'npm run deploy:production');
+    assert.equal(claim.approval.subject.command, 'npm run deploy:production');
   });
 
   it('is single use, so an approval cannot be replayed', () => {
@@ -163,7 +163,7 @@ describe('ApprovalStore', () => {
     const store = new ApprovalStore(300);
     const approval = store.create(command(), []);
 
-    assert.equal(store.peek(approval.id)?.parsed.command, 'npm run build');
+    assert.equal(store.peek(approval.id)?.subject.command, 'npm run build');
     assert.equal(store.size, 1);
     assert.equal(store.claim(approval.id).ok, true);
   });

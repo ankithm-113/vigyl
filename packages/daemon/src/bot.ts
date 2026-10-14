@@ -179,6 +179,17 @@ export function renderResult(result: CommandResult): RenderedMessage {
 
     case 'error':
       return { text: clampMessage(`⚠️ <b>Something went wrong</b>\n${codeBlock(result.reason)}`) };
+
+    case 'tool_result': {
+      // The text came from an external service and the MCP server already
+      // fenced it as data. Shown in a code block, which also stops Telegram
+      // interpreting any markup inside it.
+      const mark = result.isError ? '⚠️' : '🔗';
+      const lines = [`${mark} <b>${escapeHtml(result.description)}</b>`];
+      const body = truncateOutput(result.text);
+      if (body !== '') lines.push(codeBlock(body));
+      return { text: clampMessage(lines.join(String.fromCharCode(10))) };
+    }
   }
 }
 

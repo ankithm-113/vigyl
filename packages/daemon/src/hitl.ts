@@ -28,9 +28,17 @@ import type { ParsedCommand } from './supervisor';
 /** Who requested an approval — a Telegram chat id, in practice. */
 export type ApprovalOwner = string | number;
 
-export interface PendingApproval {
+/**
+ * What is waiting for a yes.
+ *
+ * Generic because Month 2 added a second thing that needs approval: an MCP
+ * tool call, which has no shell command and must not be turned into one. The
+ * expiry, single-use and ownership rules are identical for both and are
+ * security-relevant, so they are shared rather than reimplemented.
+ */
+export interface PendingApproval<TSubject = ParsedCommand> {
   id: string;
-  parsed: ParsedCommand;
+  subject: TSubject;
   reasons: string[];
   requestedAt: number;
   expiresAt: number;
@@ -39,8 +47,8 @@ export interface PendingApproval {
 
 export type ClaimFailure = 'unknown' | 'expired' | 'wrong_owner';
 
-export type ClaimResult =
-  | { ok: true; approval: PendingApproval }
+export type ClaimResult<TSubject = ParsedCommand> =
+  | { ok: true; approval: PendingApproval<TSubject> }
   | { ok: false; failure: ClaimFailure };
 
 /**
@@ -73,12 +81,15 @@ export function approvalReasons(
 }
 
 /** Time-boxed, single-use, owner-scoped store of commands awaiting a yes. */
-export class ApprovalStore {
-  private readonly pending = new Map<string, PendingApproval>();
+export class ApprovalStore<TSubject = ParsedCommand> {
+  private readonly pending = new Map<string, PendingApproval<TSubject>>();
   private readonly timeoutMs: number;
+  private readonly describe: (subject: TSubject) => string;
 
-  constructor(timeoutSeconds: number) {
+  constructor(timeoutSeconds: number, describe?: (subject: TSubject) => string) {
     this.timeoutMs = Math.max(0, timeoutSeconds) * 1000;
+    this.describe =
+      describe ?? ((subject) => (subject as unknown as ParsedCommand)?.command ?? 'unknown');
   }
 
   get size(): number {
@@ -86,13 +97,13 @@ export class ApprovalStore {
     return this.pending.size;
   }
 
-  create(parsed: ParsedCommand, reasons: string[], owner?: ApprovalOwner): PendingApproval {
+  create(subject: TSubject, reasons: string[], owner?: ApprovalOwner): PendingApproval<TSubject> {
     this.expire();
 
     const now = Date.now();
-    const approval: PendingApproval = {
+    const approval: PendingApproval<TSubject> = {
       id: randomUUID(),
-      parsed,
+      subject,
       reasons,
       requestedAt: now,
       expiresAt: now + this.timeoutMs,
@@ -102,7 +113,7 @@ export class ApprovalStore {
     this.pending.set(approval.id, approval);
     logger.info('Approval requested', {
       approvalId: approval.id,
-      command: parsed.command,
+      command: this.describe(subject),
       reasons,
       expiresAt: new Date(approval.expiresAt).toISOString(),
     });
@@ -115,7 +126,7 @@ export class ApprovalStore {
    * Removal is part of claiming: an approval token that survives its use can
    * be replayed to run a destructive command a second time.
    */
-  claim(id: string, owner?: ApprovalOwner): ClaimResult {
+  claim(id: string, owner?: ApprovalOwner): ClaimResult<TSubject> {
     // Look this id up BEFORE sweeping expired entries. Sweeping first would
     // delete it and report 'unknown', so the user gets "expired or already
     // handled" and cannot tell whether their deploy ran. Checking its own
@@ -144,7 +155,7 @@ export class ApprovalStore {
     }
 
     this.pending.delete(id);
-    logger.info('Approval granted', { approvalId: id, command: approval.parsed.command });
+    logger.info('Approval granted', { approvalId: id, command: this.describe(approval.subject) });
     return { ok: true, approval };
   }
 
@@ -159,12 +170,12 @@ export class ApprovalStore {
     }
 
     this.pending.delete(id);
-    logger.info('Approval denied', { approvalId: id, command: approval.parsed.command });
+    logger.info('Approval denied', { approvalId: id, command: this.describe(approval.subject) });
     return true;
   }
 
   /** Look without consuming. */
-  peek(id: string): PendingApproval | undefined {
+  peek(id: string): PendingApproval<TSubject> | undefined {
     this.expire();
     return this.pending.get(id);
   }
@@ -181,7 +192,7 @@ export class ApprovalStore {
     for (const [id, approval] of this.pending) {
       if (approval.expiresAt <= now) {
         this.pending.delete(id);
-        logger.info('Approval expired', { approvalId: id, command: approval.parsed.command });
+        logger.info('Approval expired', { approvalId: id, command: this.describe(approval.subject) });
       }
     }
   }

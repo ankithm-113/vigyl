@@ -24,6 +24,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ApprovalStore, approvalReasons, type ApprovalOwner } from './hitl';
+import {
+  McpHub,
+  describeTools,
+  mightNeedTool,
+  parseToolChoice,
+  resultToText,
+  toolGate,
+  type McpToolCall,
+} from './mcp-guy';
 import { Executor } from './executor';
 
 import { SecurityError, SecurityLayer } from './security';
@@ -45,7 +54,8 @@ export type CommandStatus =
   | 'approval_required'
   | 'rejected'
   | 'busy'
-  | 'error';
+  | 'error'
+  | 'tool_result';
 
 export interface CompletedResult {
   status: 'completed';
@@ -106,7 +116,17 @@ export interface ErrorResult {
   reason: string;
 }
 
+/** What a tool answered. Not a shell command, so it has no exit code. */
+export interface ToolCallResult {
+  status: 'tool_result';
+  tool: string;
+  description: string;
+  text: string;
+  isError: boolean;
+}
+
 export type CommandResult =
+  | ToolCallResult
   | CompletedResult
   | FailedResult
   | ApprovalRequiredResult
@@ -121,6 +141,8 @@ export interface DaemonStatus {
   workspaceRoot: string;
   model: string;
   pendingApprovals: number;
+  mcpServers: string[];
+  mcpTools: string[];
   startedAt?: number;
 }
 
@@ -154,6 +176,15 @@ export class VigylDaemon {
   private readonly supervisor: Supervisor;
   private readonly selfHeal: SelfHealingLoop;
   private readonly approvals: ApprovalStore;
+  /**
+   * Tool approvals are kept apart from command approvals.
+   *
+   * Same rules, different subject: approving "deploy to production" must never
+   * be claimable as a tool call, or the other way round, and one store holding
+   * both invites exactly that mistake.
+   */
+  private readonly toolApprovals: ApprovalStore<McpToolCall>;
+  private readonly mcp: McpHub;
   private readonly sessions = new SessionStore();
   private readonly logs: CommandLogStore;
   private readonly commands: HistoryStore;
@@ -180,6 +211,11 @@ export class VigylDaemon {
     this.supervisor = parts.supervisor ?? new Supervisor(resolveLlm(config));
     this.selfHeal = new SelfHealingLoop(this.executor, this.supervisor, config);
     this.approvals = new ApprovalStore(config.hitl.timeout_seconds);
+    this.toolApprovals = new ApprovalStore<McpToolCall>(
+      config.hitl.timeout_seconds,
+      (call) => `${call.tool} ${JSON.stringify(call.args)}`,
+    );
+    this.mcp = new McpHub(config.mcp_servers ?? []);
     // Under .vigyl/logs, alongside daemon.log, so one directory holds all output.
     this.logs = new CommandLogStore(path.join(stateDir, 'logs', 'commands'));
     // Sibling of logs/, so all runtime state lives under one directory.
@@ -214,6 +250,10 @@ export class VigylDaemon {
     this.running = true;
     this.startedAt = Date.now();
     if (this.config.monitor.enabled) this.monitor.start();
+
+    // Connecting is best-effort: a missing Firebase key must not stop the
+    // daemon, it just means those tools are not offered.
+    await this.mcp.init();
     logger.info('Vigyl daemon started', {
       version: DAEMON_VERSION,
       workspace: this.security.workspaceRoot,
@@ -228,7 +268,8 @@ export class VigylDaemon {
     // Before anything else: an interval that outlives stop() keeps the libuv
     // loop alive and the process never exits.
     this.monitor.stop();
-    const dropped = this.approvals.clear();
+    const dropped = this.approvals.clear() + this.toolApprovals.clear();
+    await this.mcp.close();
     this.sessions.clearAll();
     this.running = false;
     this.startedAt = undefined;
@@ -242,7 +283,9 @@ export class VigylDaemon {
       version: DAEMON_VERSION,
       workspaceRoot: this.security.workspaceRoot,
       model: resolveLlm(this.config).model,
-      pendingApprovals: this.approvals.size,
+      pendingApprovals: this.approvals.size + this.toolApprovals.size,
+      mcpServers: this.mcp.connectedServers,
+      mcpTools: this.mcp.getToolManifest().map((tool) => tool.name),
       ...(this.startedAt === undefined ? {} : { startedAt: this.startedAt }),
     };
   }
@@ -267,6 +310,9 @@ export class VigylDaemon {
     if (this.executor.isRunning) {
       return { status: 'busy', reason: 'A command is already running. Wait for it to finish.' };
     }
+
+    const routed = await this.tryTool(userMessage, onProgress, options);
+    if (routed) return routed;
 
     let parsed: ParsedCommand;
     try {
@@ -312,6 +358,86 @@ export class VigylDaemon {
     return result;
   }
 
+  /**
+   * Answer from an MCP tool, if one fits.
+   *
+   * Returns undefined to mean "not a tool question", which falls through to the
+   * shell path. Every failure here does the same: a router that cannot decide,
+   * a model that invents a tool name, a server that is down — none of them
+   * should stop someone running their build, so they degrade to the normal
+   * route rather than becoming an error.
+   */
+  private async tryTool(
+    userMessage: string,
+    onProgress: ProgressReporter,
+    options: HandleOptions,
+  ): Promise<CommandResult | undefined> {
+    const tools = this.mcp.getToolManifest();
+    if (!mightNeedTool(userMessage, tools)) return undefined;
+
+    let decision;
+    try {
+      onProgress('🔎 Checking your connected services...');
+      const choice = await this.supervisor.chooseTool(userMessage, describeTools(tools));
+      decision = parseToolChoice(choice, tools);
+    } catch (err) {
+      logger.warn('Tool routing failed, falling back to the shell', {
+        reason: err instanceof SupervisorError ? err.message : String(err),
+      });
+      return undefined;
+    }
+
+    const call = decision.call;
+    if (!call) {
+      logger.debug('No tool chosen', { reason: decision.reason });
+      return undefined;
+    }
+
+    // The gate reads the tool's own annotations and the operator's keywords.
+    // Nothing the model said about its request is consulted here.
+    const gate = toolGate(this.mcp.findTool(call.tool), call, this.config.hitl.require_for);
+    if (gate.needsApproval) {
+      const approval = this.toolApprovals.create(call, gate.reasons, options.owner);
+      return {
+        status: 'approval_required',
+        approvalId: approval.id,
+        command: `${call.tool} ${JSON.stringify(call.args)}`,
+        description: call.description,
+        isDestructive: this.mcp.findTool(call.tool)?.destructive === true,
+        expiresAt: approval.expiresAt,
+        reasons: gate.reasons,
+      };
+    }
+
+    onProgress(`📋 ${call.description}`);
+    const result = await this.runTool(call);
+    this.remember(options.owner, userMessage, result);
+    return result;
+  }
+
+  /** Call a tool that has already been allowed. */
+  private async runTool(call: McpToolCall): Promise<ToolCallResult> {
+    try {
+      const raw = await this.mcp.callTool(call.tool, call.args);
+      return {
+        status: 'tool_result',
+        tool: call.tool,
+        description: call.description,
+        text: resultToText(raw),
+        isError: raw.isError === true,
+      };
+    } catch (err) {
+      logger.warn('Tool call failed', { tool: call.tool, reason: String(err) });
+      return {
+        status: 'tool_result',
+        tool: call.tool,
+        description: call.description,
+        text: `That did not work: ${(err as Error).message}`,
+        isError: true,
+      };
+    }
+  }
+
   private requestApproval(
     parsed: ParsedCommand,
     reasons: string[],
@@ -346,24 +472,42 @@ export class VigylDaemon {
       return { status: 'busy', reason: 'A command is already running. Wait for it to finish.' };
     }
 
-    const claim = this.approvals.claim(approvalId, options.owner);
-    if (!claim.ok) {
-      return { status: 'rejected', reason: explainClaimFailure(claim.failure) };
+    // Tool approvals live in their own store, so a token for "deploy to
+    // production" can never be claimed as a tool call or the reverse.
+    const toolClaim = this.toolApprovals.claim(approvalId, options.owner);
+    if (toolClaim.ok) {
+      const call = toolClaim.approval.subject;
+      onProgress(`📋 ${call.description}`);
+      const toolResult = await this.runTool(call);
+      this.remember(options.owner, call.description, toolResult);
+      return toolResult;
     }
 
-    const result = await this.execute(claim.approval.parsed, onProgress);
-    this.remember(options.owner, claim.approval.parsed.description, result);
+    const claim = this.approvals.claim(approvalId, options.owner);
+    if (!claim.ok) {
+      // Report the command store's failure: the tool store returning 'unknown'
+      // for a command id is noise, but a genuinely expired tool token must
+      // still say "expired", so a non-unknown tool failure wins.
+      const failure = toolClaim.failure === 'unknown' ? claim.failure : toolClaim.failure;
+      return { status: 'rejected', reason: explainClaimFailure(failure) };
+    }
+
+    const result = await this.execute(claim.approval.subject, onProgress);
+    this.remember(options.owner, claim.approval.subject.description, result);
     return result;
   }
 
   /** Discard a pending approval. Returns false if it was already gone. */
   deny(approvalId: string, options: HandleOptions = {}): boolean {
-    return this.approvals.deny(approvalId, options.owner);
+    // Either store may hold it; denying is the same either way.
+    const deniedTool = this.toolApprovals.deny(approvalId, options.owner);
+    const deniedCommand = this.approvals.deny(approvalId, options.owner);
+    return deniedTool || deniedCommand;
   }
 
   /** Inspect a pending approval without consuming it. */
   peekApproval(approvalId: string): ParsedCommand | undefined {
-    return this.approvals.peek(approvalId)?.parsed;
+    return this.approvals.peek(approvalId)?.subject;
   }
 
   /** This chat's in-memory context turns. Never another chat's. */

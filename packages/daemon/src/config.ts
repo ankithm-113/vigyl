@@ -131,6 +131,29 @@ export const VigylConfigSchema = z
       .strict()
       .default({}),
 
+    /**
+     * MCP servers to spawn and ask questions of.
+     *
+     * Empty by default: a daemon that has not been told about a cloud service
+     * should not try to start one. Each entry is a command the daemon spawns
+     * and speaks MCP to over stdio.
+     */
+    mcp_servers: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1, 'needs a name'),
+            command: z.string().min(1, 'needs a command to run'),
+            args: z.array(z.string()).default([]),
+            // Values may reference the daemon's own environment as ${VAR};
+            // credentials are passed to the child this way rather than on the
+            // command line, where they would appear in a process listing.
+            env: z.record(z.string()).default({}),
+          })
+          .strict(),
+      )
+      .default([]),
+
     self_heal: z
       .object({
         enabled: z.boolean().default(true),
@@ -440,6 +463,7 @@ export function getDefaultConfig(workspaceRoot: string): Record<string, unknown>
       require_for: ['production', 'env', 'delete', 'migrate', 'push'],
       timeout_seconds: 300,
     },
+    mcp_servers: [],
     self_heal: { enabled: true, max_retries: 3, context_lines: 80 },
     monitor: {
       enabled: true,

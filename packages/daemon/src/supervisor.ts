@@ -65,6 +65,28 @@ export const ParsedCommandSchema = z.object({
 export type ParsedCommand = z.infer<typeof ParsedCommandSchema>;
 
 /**
+ * Which MCP tool answers this message, if any.
+ *
+ * `argsJson` is a JSON string rather than an object: every tool has a different
+ * input shape and one schema cannot describe all of them. It is parsed
+ * defensively by `parseToolChoice`, and the MCP server validates it properly
+ * afterwards, so a malformed answer costs a message rather than anything else.
+ */
+export const ToolChoiceSchema = z.object({
+  toolName: z
+    .string()
+    .describe('Exactly one tool name from the list, or "none" if no tool fits'),
+  argsJson: z
+    .string()
+    .describe('Arguments as a JSON object string, e.g. {"collection":"users","limit":5}. "{}" if none.'),
+  description: z
+    .string()
+    .describe('One plain-English sentence describing what this will do, for the user'),
+});
+
+export type ToolChoice = z.infer<typeof ToolChoiceSchema>;
+
+/**
  * A patch the model proposes.
  *
  * Modelled as one flat object with a `canFix` flag rather than a nullable
@@ -162,6 +184,37 @@ COMMON MAPPINGS
 - "check health"       -> curl -s http://localhost:3000/health
 - "run tests"          -> npm test
 - "build"              -> npm run build`;
+}
+
+function buildToolSystemPrompt(toolDescriptions: string): string {
+  return `You are Vigyl's router. A developer asked a question. Decide whether one of
+the tools below answers it, and with what arguments.
+
+${INJECTION_NOTICE}
+
+AVAILABLE TOOLS
+${toolDescriptions}
+
+RULES
+- Choose "none" unless a tool clearly answers the request. A question about
+  running a command, building, testing or deploying the local project is NOT a
+  tool call: those go to the shell instead.
+- Use exactly one tool name from the list. Never invent one.
+- argsJson must be a JSON object as a string, using only the parameters that
+  tool declares. Use "{}" when the tool takes none.
+- Never put a secret, a token or a password in the arguments.
+- Some tools are marked [needs approval]. Choose them when they are genuinely
+  what was asked for; a human is asked before anything runs, so do not try to
+  avoid them by picking a different tool.
+- description is one sentence a person will read before approving. Say what
+  will happen, plainly, including which repository or table it touches.
+
+EXAMPLES
+- "how many users signed up today?"  -> auth_users_today, {}
+- "show me the last 5 orders"        -> firestore_query, {"collection":"orders","limit":5}
+- "did CI pass on main?"             -> ci_status, {"ref":"main"}
+- "how many rows in users?"          -> db_query, {"sql":"SELECT count(*) FROM users"}
+- "run the tests"                    -> none (that is a shell command)`;
 }
 
 function buildPatchSystemPrompt(workspaceRoot: string): string {
@@ -273,6 +326,47 @@ ${fence(userMessage)}`;
     });
 
     return parsed;
+  }
+
+  /**
+   * Choose an MCP tool for a message, if one fits.
+   *
+   * The tool list is given as data, and the message is fenced exactly as it is
+   * for command parsing: it is written by a person, and the tools it can reach
+   * include ones that deploy. The model's answer is only a suggestion — whether
+   * the call needs approval is decided afterwards from the tool's own
+   * annotations, never from anything the model says here.
+   */
+  async chooseTool(userMessage: string, toolDescriptions: string): Promise<ToolChoice> {
+    if (userMessage.trim() === '') {
+      throw new SupervisorError('Cannot route an empty message.', 'unknown');
+    }
+
+    const response = await this.provider.structured({
+      schemaName: 'tool_choice',
+      schema: ToolChoiceSchema,
+      system: buildToolSystemPrompt(toolDescriptions),
+      user: `Developer request:
+${fence(userMessage)}`,
+      maxTokens: PARSE_MAX_TOKENS,
+      timeoutMs: PARSE_TIMEOUT_MS,
+      what: 'choose a tool',
+    });
+
+    const choice = response.parsed;
+    if (choice === undefined) {
+      throw new SupervisorError(
+        `The model did not choose a tool (stop reason: ${response.stopReason}).`,
+        'api',
+      );
+    }
+
+    logger.info('Tool chosen', {
+      tool: choice.toolName,
+      usage: response.totalTokens,
+    });
+
+    return choice;
   }
 
   /**

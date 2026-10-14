@@ -61,6 +61,7 @@ function makeConfig(overrides: Partial<VigylConfig> = {}): VigylConfig {
     telegram: { bot_token: '1:x', allowed_chat_ids: [1] },
     provider: 'anthropic',
     anthropic: { api_key: 'sk-ant-test', model: 'claude-haiku-4-5' },
+    mcp_servers: [],
     hitl: { require_for: ['production', 'delete', 'push'], timeout_seconds: 300 },
     self_heal: { enabled: true, max_retries: 3, context_lines: 80 },
     monitor: {

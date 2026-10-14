@@ -177,6 +177,24 @@ export {
 } from './monitor';
 
 export {
+  McpHub,
+  STARTUP_TIMEOUT_MS,
+  TOOL_TIMEOUT_MS,
+  describeTools,
+  mightNeedTool,
+  parseToolChoice,
+  resultToText,
+  toolGate,
+  type McpCallResult,
+  type McpClientLike,
+  type McpServerConfig,
+  type McpTool,
+  type McpToolCall,
+  type RouteDecision,
+  type ToolGateVerdict,
+} from './mcp-guy';
+
+export {
   SecurityError,
   SecurityLayer,
   isContained,

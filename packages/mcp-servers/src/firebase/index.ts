@@ -138,7 +138,12 @@ type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: bo
  */
 type RegisterTool = (
   name: string,
-  config: { title: string; description: string; inputSchema: Record<string, unknown> },
+  config: {
+    title: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    annotations?: Record<string, unknown>;
+  },
   handler: (args: never) => Promise<ToolResult>,
 ) => void;
 
@@ -154,6 +159,7 @@ export function registerFirebaseTools(server: McpServer, handles: FirebaseHandle
         'Read documents from a Firestore collection, newest first if an orderBy ' +
         'is given. Read-only. Returns at most ' + MAX_LIMIT + ' documents.',
       inputSchema: FIRESTORE_QUERY_SHAPE,
+      annotations: { readOnlyHint: true },
     },
     async (raw: never): Promise<ToolResult> => {
       const args = raw as FirestoreQueryArgs;
@@ -199,6 +205,7 @@ export function registerFirebaseTools(server: McpServer, handles: FirebaseHandle
       title: 'Count Firebase Auth users',
       description: 'Total number of users in Firebase Authentication.',
       inputSchema: {},
+      annotations: { readOnlyHint: true },
     },
     async (): Promise<ToolResult> => {
       try {
@@ -230,6 +237,7 @@ export function registerFirebaseTools(server: McpServer, handles: FirebaseHandle
           .optional()
           .describe(`IANA time zone deciding when "today" starts (default ${DEFAULT_TIME_ZONE}).`),
       },
+      annotations: { readOnlyHint: true },
     },
     async (raw: never): Promise<ToolResult> => {
       const { timeZone } = raw as { timeZone?: string };

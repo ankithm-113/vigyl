@@ -5,8 +5,16 @@
     "incremental": false,
     "declaration": false,
     "declarationMap": false,
-    "outDir": "./test-dist"
+    "outDir": "./test-dist",
+    "rootDir": "."
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "test-dist"]
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test-dist"
+  ]
 }
