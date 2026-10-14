@@ -93,6 +93,9 @@ const NOT_PATCHABLE: ReadonlySet<ErrorType> = new Set<ErrorType>([
   'dependency_missing',
   'permission_error',
   'network_error',
+  // No edit frees memory or disk. Retrying the same command will not help
+  // either, but that is the operator's call, not a patch's.
+  'resource_exhausted',
 ]);
 
 export type StopReason =

@@ -25,6 +25,8 @@ export interface BenchCase {
     | 'network_error'
     | 'build_error'
     | 'test_failure'
+    | 'resource_exhausted'
+    | 'runtime_error'
     | 'unknown';
   readonly reach: 'rules' | 'model';
   readonly log: string;
@@ -144,11 +146,10 @@ export const CORPUS: readonly BenchCase[] = [
     ),
   },
   {
-    // Debatable: the cause is configuration (wrong JDK), but the output is a
-    // build failure and the rules say build_error. Both defensible, so it is
-    // not counted against the model half.
+    // Day 4 settled this: the cause is configuration (wrong JDK), and the
+    // rules now have a wrong-runtime signal that says so.
     name: 'gradle, wrong java version configured',
-    expect: 'build_error',
+    expect: 'config_error',
     reach: 'rules',
     log: lines(
       '> Configure project :app',
@@ -294,7 +295,7 @@ export const CORPUS: readonly BenchCase[] = [
   },
   {
     name: 'java heap exhausted',
-    expect: 'unknown',
+    expect: 'resource_exhausted',
     reach: 'model',
     log: lines(
       'Compiling 412 source files...',
@@ -305,7 +306,7 @@ export const CORPUS: readonly BenchCase[] = [
   },
   {
     name: 'disk full during a build',
-    expect: 'unknown',
+    expect: 'resource_exhausted',
     reach: 'model',
     log: lines(
       'Copying artefacts...',

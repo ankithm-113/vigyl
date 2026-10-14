@@ -5,7 +5,9 @@ machine classify build failures, so Vigyl stops paying a cloud provider to do
 it? This is what the measurements said.
 
 **Short answer: not on this hardware, and the confidence score cannot be used
-to tell when it has gone wrong.** The regex fast path was 100% accurate at
+to tell when it has gone wrong. The rules were widened instead — see
+[what happened next](#what-happened-next-day-4) — and now answer the whole
+corpus.** The regex fast path was 100% accurate at
 ~1.5ms. Both local models were 36% accurate at 10–50 seconds, and reported
 0.8–0.9 confidence on every wrong answer.
 
@@ -109,6 +111,41 @@ So the honest conclusion is that **local inference should ship disabled, marked
 experimental**, and the cost saving should come from widening the rules rather
 than from a 2 GB download. The machine that benefits from a local model is one
 with a GPU, and that is a different claim to test.
+
+## What happened next (day 4)
+
+The rules were widened to cover all 11 cases the models failed at, plus two new
+classes the taxonomy had no room for.
+
+| | Before (day 3) | After (day 4) |
+|---|---|---|
+| Cases the rules answer | 9 of 20 | **20 of 20** |
+| Accuracy on those | 100% | **100%** |
+| Cases needing a model | 11 | **0** |
+| Time per classification | ~1.5ms | **67µs** |
+
+Two error types were added, because both models' commonest mistake was putting
+things in `build_error` that had no better home:
+
+- **`resource_exhausted`** — out of memory, no space left, too many open files,
+  exit 137. Checked **first**, ahead of every other rule: when a machine runs
+  out of memory the rest of the output is symptoms. An OOM build prints
+  "Cannot find module" because the compiler died halfway, and calling that
+  `dependency_missing` sends the loop after an `npm install` that cannot help.
+  It is also marked not-patchable — no edit frees disk.
+- **`runtime_error`** — unhandled rejections, uncaught exceptions, segfaults,
+  null dereferences. Checked *after* tests, so a rejection thrown inside a test
+  is still a test failure. These stay patchable, because an unhandled rejection
+  is usually a real bug in the code.
+
+Two orderings turned out to be load-bearing and are now tested directly: a Rust
+panic is a `test_failure` when it comes from a `::tests::` module and a
+`runtime_error` anywhere else; and a bundler saying "you may need an appropriate
+loader" is a `config_error`, not a `syntax_error`, because the file parses
+perfectly well once something is configured to read it.
+
+**The local model is now needed for none of the benchmark corpus**, at roughly
+170,000x the speed, deterministically, with no download.
 
 ## Reproducing
 

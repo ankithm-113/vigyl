@@ -5,35 +5,52 @@ import { fastClassify } from '../classifier';
 import { CORPUS, MODEL_CASES, RULE_CASES } from './corpus';
 
 /**
- * The benchmark is only honest if its two halves are what they claim.
+ * Day 3 split this corpus into failures the rules named and failures only a
+ * model could attempt, and benchmarked the model on the second half. It scored
+ * 36% in 11–16 seconds per answer.
  *
- * If a 'model' case is actually answered by the rules, the benchmark measures
- * the rules and reports it as model accuracy — a flattering number that says
- * nothing about the thing being chosen.
+ * Day 4 widened the rules to cover that half. **They now answer all 20 cases
+ * correctly, in about a millisecond, deterministically.** The `reach` field is
+ * kept as a record of which layer answered when each case was added, and these
+ * tests hold the line: no case may regress to unanswered, and none may be
+ * answered with the wrong label.
  */
 describe('benchmark corpus', () => {
-  it('splits into cases the rules answer and cases they do not', () => {
-    assert.equal(RULE_CASES.length + MODEL_CASES.length, CORPUS.length);
+  it('is answered completely by the rules, with no model at all', () => {
+    const unanswered = CORPUS.filter((c) => fastClassify(c.log) === null);
+    assert.deepEqual(
+      unanswered.map((c) => c.name),
+      [],
+      'a case the rules cannot name means paying for a cloud call again',
+    );
+  });
+
+  it('is answered correctly, not merely answered', () => {
+    const wrong = CORPUS.filter((c) => fastClassify(c.log)?.errorType !== c.expect)
+      .map((c) => `${c.name}: got ${fastClassify(c.log)?.errorType}, wanted ${c.expect}`);
+    assert.deepEqual(wrong, []);
+  });
+
+  it('covers the cases a local model got wrong', () => {
+    // docs/SLM-BENCHMARK.md: 11 cases, 36% from Llama 3.2 1B and Qwen2.5 1.5B.
+    assert.ok(MODEL_CASES.length >= 11, 'the benchmarked half must stay in the corpus');
     assert.ok(RULE_CASES.length >= 5);
-    assert.ok(MODEL_CASES.length >= 10, 'the model half is the one that matters');
+    assert.equal(RULE_CASES.length + MODEL_CASES.length, CORPUS.length);
   });
 
-  it('every "rules" case really is answered by the rules, correctly', () => {
-    for (const testCase of RULE_CASES) {
-      const result = fastClassify(testCase.log);
-      assert.ok(result, `rules did not answer: ${testCase.name}`);
-      assert.equal(result.errorType, testCase.expect, `wrong label for: ${testCase.name}`);
-    }
+  it('answers in microseconds, against seconds for a model', () => {
+    const started = process.hrtime.bigint();
+    for (const testCase of CORPUS) fastClassify(testCase.log);
+    const perCaseMs = Number(process.hrtime.bigint() - started) / 1e6 / CORPUS.length;
+    assert.ok(perCaseMs < 20, `expected well under 20ms per case, got ${perCaseMs.toFixed(2)}ms`);
   });
 
-  it('every "model" case really is one the rules cannot name', () => {
-    for (const testCase of MODEL_CASES) {
-      const result = fastClassify(testCase.log);
-      assert.equal(
-        result,
-        null,
-        `${testCase.name} is answered by the rules, so it does not belong in the model half`,
+  it('is deterministic', () => {
+    for (const testCase of CORPUS) {
+      const answers = new Set(
+        Array.from({ length: 10 }, () => fastClassify(testCase.log)?.errorType),
       );
+      assert.equal(answers.size, 1, `${testCase.name} classified more than one way`);
     }
   });
 

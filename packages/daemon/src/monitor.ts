@@ -18,6 +18,12 @@ export const ERROR_TYPES = [
   'network_error',
   'build_error',
   'test_failure',
+  // Added in Month 2 day 4, from the benchmark: both local models labelled
+  // resource exhaustion and runtime crashes 'build_error' with high
+  // confidence, and so did the rules by omission -- there was nowhere else for
+  // them to go.
+  'resource_exhausted',
+  'runtime_error',
   'unknown',
 ] as const;
 
@@ -65,6 +71,30 @@ interface ClassificationRule {
  */
 const RULES: readonly ClassificationRule[] = [
   {
+    // First, ahead of everything. When a machine runs out of memory or disk,
+    // every other error in the output is a symptom: an OOM build prints
+    // "Cannot find module" because the compiler died halfway, and labelling
+    // that dependency_missing sends the self-healing loop after an npm install
+    // that will not help. Resource exhaustion is the cause, so it wins.
+    type: 'resource_exhausted',
+    signal: 'resource',
+    patterns: [
+      /out of memory/i,
+      /OutOfMemoryError/,
+      /\bENOMEM\b/,
+      /heap (?:space|limit|out of memory)/i,
+      /cannot allocate memory/i,
+      /no space left on device/i,
+      /\bENOSPC\b/,
+      /disk (?:is )?full/i,
+      /quota exceeded/i,
+      /too many open files/i,
+      /\bEMFILE\b/,
+      /killed(?: process)?.*(?:out of memory|oom)/i,
+      /\bexit code 137\b/,
+    ],
+  },
+  {
     type: 'dependency_missing',
     signal: 'module-not-found',
     patterns: [
@@ -78,6 +108,14 @@ const RULES: readonly ClassificationRule[] = [
       /command not found/i,
       /npm ERR! 404/i,
       /package .+ is not installed/i,
+      // A shared library the installed package depends on. Python and native
+      // Node addons fail this way, and the message never says "module".
+      /cannot open shared object file/i,
+      /error while loading shared libraries/i,
+      /\bImportError\b/,
+      /DLL load failed/i,
+      /symbol lookup error/i,
+      /\bERR_DLOPEN_FAILED\b/,
     ],
   },
   {
@@ -110,6 +148,28 @@ const RULES: readonly ClassificationRule[] = [
     ],
   },
   {
+    // Gradle, npm engines, and anything else refusing to run under the
+    // installed toolchain. The code is fine; the machine is set up wrong.
+    // Ahead of build_error, which would otherwise claim it via "build failed".
+    type: 'config_error',
+    signal: 'wrong-runtime',
+    patterns: [
+      /requires (?:java|jdk|node|node\.js|python|ruby|go|rust) [0-9][0-9.]*/i,
+      /unsupported engine/i,
+      /requires? (?:a )?(?:minimum|at least) version/i,
+      /you are currently using (?:java|node|python) [0-9]/i,
+    ],
+  },
+  {
+    type: 'config_error',
+    signal: 'loader-missing',
+    patterns: [
+      /need an appropriate loader/i,
+      /no loader (?:is )?configured/i,
+      /unknown file extension/i,
+    ],
+  },
+  {
     type: 'syntax_error',
     signal: 'syntax',
     patterns: [
@@ -122,6 +182,9 @@ const RULES: readonly ClassificationRule[] = [
       /error TS1\d{3}\b/, // TS1xxx is the syntax/grammar range
       /IndentationError/,
       /expected .+ but found/i,
+      /dockerfile parse error/i,
+      /module parse failed/i,
+      /invalid syntax/i,
     ],
   },
   {
@@ -137,6 +200,16 @@ const RULES: readonly ClassificationRule[] = [
       /webpack.*\berror\b/i,
       /rollup failed/i,
       /error: cannot find name/i,
+      // Rust: error[E0502] and the compile summary that follows it.
+      /error\[E[0-9]{4}\]/,
+      /could not compile/i,
+      // Go: "./handlers/user.go:27:2: declared and not used: ctx"
+      /declared (?:and|but) not used/i,
+      /\.go:[0-9]+:[0-9]+:/,
+      /undefined: [A-Za-z_]/,
+      // Java/Gradle phrasing that is about the code, not configuration.
+      /cannot find symbol/i,
+      /incompatible types/i,
     ],
   },
   {
@@ -154,6 +227,34 @@ const RULES: readonly ClassificationRule[] = [
       /\d+ (?:tests?|specs?|examples?) (?:failed|failing)\b/i,
       /\d+ (?:failed|failing)\b.*\d+ (?:passed|passing)\b/i,
       /expected .+ (?:to (?:be|equal)|received)/i,
+      /timeout of [0-9]+ ?ms exceeded/i,
+      /test timed out after/i,
+      /toMatchSnapshot/,
+      /snapshots?:.*[0-9]+ failed/i,
+      // A Rust panic raised from a test module. A panic elsewhere is a runtime
+      // failure, so the ::tests:: marker is load-bearing.
+      /thread '[^']*::tests?::[^']*' panicked/,
+      /panicked at .*tests?[\/\\]/,
+    ],
+  },
+  {
+    // After tests, so a rejection thrown inside a test is still a test failure.
+    // These are patchable: an unhandled rejection is usually a real code bug.
+    type: 'runtime_error',
+    signal: 'runtime',
+    patterns: [
+      /unhandled promise rejection/i,
+      /\bUnhandledPromiseRejection\b/,
+      /unhandledRejection/,
+      /uncaught exception/i,
+      /\bUncaughtException\b/,
+      /segmentation fault/i,
+      /\bSIGSEGV\b/,
+      /fatal error in|fatal exception/i,
+      /\bTypeError\b.*(?:undefined|null)/,
+      /cannot read propert(?:y|ies) .+ of (?:undefined|null)/i,
+      /\bNullPointerException\b/,
+      /\bpanicked at\b/,
     ],
   },
   {
@@ -168,6 +269,22 @@ const RULES: readonly ClassificationRule[] = [
       /no such file or directory.*\.env/i,
       /could not (?:find|load) (?:the )?config/i,
       /\.env.*(?:not found|missing)/i,
+      // "FATAL: STRIPE_SECRET must be set before the server can start"
+      /\b[A-Z][A-Z0-9_]{2,} (?:must be set|is required|not configured)\b/,
+      /must be set (?:before|in|for)/i,
+      // Terraform, and anything else rejecting an unknown setting.
+      /unsupported argument/i,
+      /unsupported block type/i,
+      /an argument named .+ is not expected here/i,
+      /unknown (?:option|setting|field|property)/i,
+      // The resource the configuration points at was never created.
+      /database .+ does not exist/i,
+      /role .+ does not exist/i,
+      /relation .+ does not exist/i,
+      /bucket .+ does not exist/i,
+      // Webpack and friends: the file is fine, nothing was configured to read it.
+      /need an appropriate loader/i,
+      /no loader (?:is )?configured/i,
     ],
   },
 ];
