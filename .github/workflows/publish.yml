@@ -1,0 +1,164 @@
+name: Publish
+
+# Publishing runs here rather than from a laptop, because npm's trusted
+# publishing proves who is publishing with a short-lived OIDC token instead of
+# a long-lived secret. There is no NPM_TOKEN in this repository, and there
+# should never be one: a token that can publish is a token that can be stolen,
+# and the account's 2FA is a passkey the npm CLI cannot satisfy anyway.
+#
+# One-time setup, per package, on npmjs.com:
+#   Package → Settings → Trusted publisher → GitHub Actions
+#     Organization or user: ankithm-113
+#     Repository:           vigyl
+#     Workflow filename:    publish.yml
+#     Environment:          (leave empty)
+#
+# npm only lets you configure a trusted publisher for a package that already
+# exists, so a brand-new package name needs one manual publish first. See
+# docs/PUBLISHING.md.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and check everything, but do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  # The whole point: lets the job mint the OIDC token npm verifies.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # Required even with OIDC: it writes the .npmrc that points publish
+          # at the public registry.
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Use an npm that supports trusted publishing
+        # Node 20 ships npm 10, which has no OIDC support and would fail with a
+        # confusing auth error rather than saying so.
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npx turbo run test --force
+
+      - name: Check the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        # A tag that disagrees with package.json publishes something nobody
+        # asked for, and the tag is what the release notes point at.
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          echo "tag=$TAG package=$VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $VERSION"
+            exit 1
+          fi
+
+      - name: Check every package agrees on the version
+        # A monorepo where one package lags publishes a CLI that installs last
+        # month's daemon.
+        run: |
+          EXPECTED=$(node -p "require('./packages/cli/package.json').version")
+          FAILED=0
+          for pkg in daemon slm mcp-servers cli; do
+            ACTUAL=$(node -p "require('./packages/$pkg/package.json').version")
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::@vigylx/$pkg is $ACTUAL, expected $EXPECTED"
+              FAILED=1
+            fi
+          done
+          exit $FAILED
+
+      - name: Check the workspace cross-references point at this version
+        # npm resolves these locally but publishes them as real ranges, so a
+        # stale one ships a package that installs an older sibling.
+        run: |
+          node -e "
+            const fs = require('fs');
+            const expected = require('./packages/cli/package.json').version;
+            let failed = false;
+            for (const name of ['daemon', 'slm', 'mcp-servers', 'cli']) {
+              const pkg = JSON.parse(fs.readFileSync('packages/' + name + '/package.json', 'utf8'));
+              for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+                for (const [dep, range] of Object.entries(pkg[field] || {})) {
+                  if (!dep.startsWith('@vigylx/')) continue;
+                  if (range !== '^' + expected) {
+                    console.log('::error::' + pkg.name + ' depends on ' + dep + '@' + range + ', expected ^' + expected);
+                    failed = true;
+                  }
+                }
+              }
+            }
+            process.exit(failed ? 1 : 0);
+          "
+
+      - name: Publish
+        # Order matters for anyone installing while this runs: a package should
+        # not appear before the siblings it depends on.
+        #
+        # Already-published versions are skipped rather than failing, so a
+        # re-run after a partial failure finishes the job instead of refusing
+        # to start.
+        if: github.event_name == 'push' || inputs.dry_run == false
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+
+          for pkg in daemon slm mcp-servers cli; do
+            NAME="@vigylx/$pkg"
+            if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+              echo "✓ $NAME@$VERSION is already published, skipping"
+              continue
+            fi
+            echo "→ publishing $NAME@$VERSION"
+            npm publish -w "packages/$pkg" --access public
+          done
+
+      - name: Dry run
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+        # --dry-run needs no credentials, so this is safe to run on a branch to
+        # check the tarball contents before tagging anything.
+        run: |
+          for pkg in daemon slm mcp-servers cli; do
+            echo "=== @vigylx/$pkg ==="
+            npm publish -w "packages/$pkg" --access public --dry-run
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          {
+            echo "## Vigyl $VERSION"
+            echo ""
+            for pkg in daemon slm mcp-servers cli; do
+              if npm view "@vigylx/$pkg@$VERSION" version >/dev/null 2>&1; then
+                echo "- ✅ \`@vigylx/$pkg@$VERSION\`"
+              else
+                echo "- ⬜ \`@vigylx/$pkg@$VERSION\` not on the registry"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
